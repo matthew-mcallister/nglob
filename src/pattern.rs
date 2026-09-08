@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::iter::FusedIterator;
+use std::path::is_separator;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
@@ -70,7 +71,7 @@ fn next_token(input: &mut &str) -> Result<Option<Token>, ParseError> {
         Some(',') => Token::Comma,
         Some('{') => Token::Lbrace,
         Some('}') => Token::Rbrace,
-        Some(c) if is_sep(c) => Token::Sep,
+        Some(c) if is_separator(c) => Token::Sep,
         Some(c) => Token::Char(c),
         None => return Ok(None),
     };
@@ -109,14 +110,6 @@ pub enum Ast {
     Wildcard,   // ?
     Star,       // *
     StarStar,   // **
-}
-
-fn is_sep(c: char) -> bool {
-    if cfg!(windows) {
-        c == '/' || c == '\\'
-    } else {
-        c == '/'
-    }
 }
 
 /// # Special symbols
