@@ -100,7 +100,7 @@ impl<'a> Tokens<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum Ast {
+pub enum Ast {
     Empty,
     Char(char),
     Sep,
@@ -239,6 +239,10 @@ fn parse_alternative(tokens: &mut Tokens) -> Result<Ast, ParseError> {
     Ok(Ast::Alternative(branches))
 }
 
+pub fn parse_ast(input: &str) -> Result<Ast, ParseError> {
+    parse_sequence(&mut Tokens { input }, |_| false)
+}
+
 pub fn parse(input: &str) -> Result<Pattern, ParseError> {
     let mut input = Tokens { input };
     let base = parse_base(&mut input)?;
@@ -256,7 +260,7 @@ mod tests {
     use Ast::*;
 
     fn parse_seq(s: &str) -> Ast {
-        parse_sequence(&mut Tokens { input: s }, |_| false).unwrap()
+        parse_ast(s).unwrap()
     }
 
     fn pattern(base: &str, root: Ast) -> Pattern {

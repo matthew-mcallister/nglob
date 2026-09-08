@@ -1,5 +1,5 @@
 mod pattern;
-mod state;
+mod nfa;
 mod trie;
 
 macro_rules! try_nested {
