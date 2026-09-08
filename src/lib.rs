@@ -2,12 +2,16 @@ mod pattern;
 mod nfa;
 mod trie;
 
-macro_rules! try_nested {
-    ($expr:expr) => {
-        match $expr {
-            Ok(Some(x)) => x,
-            Ok(None) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        }
+#[cfg(test)]
+macro_rules! test_log {
+    ($($tok:tt)*) => {
+        println!($($tok)*);
     }
 }
+
+#[cfg(not(test))]
+macro_rules! test_log {
+    ($($tok:tt)*) => {}
+}
+
+pub(crate) use test_log;

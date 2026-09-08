@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::iter::FusedIterator;
+use std::path::is_separator;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
@@ -70,7 +71,7 @@ fn next_token(input: &mut &str) -> Result<Option<Token>, ParseError> {
         Some(',') => Token::Comma,
         Some('{') => Token::Lbrace,
         Some('}') => Token::Rbrace,
-        Some(c) if is_sep(c) => Token::Sep,
+        Some(c) if is_separator(c) => Token::Sep,
         Some(c) => Token::Char(c),
         None => return Ok(None),
     };
@@ -109,14 +110,6 @@ pub enum Ast {
     Wildcard,   // ?
     Star,       // *
     StarStar,   // **
-}
-
-fn is_sep(c: char) -> bool {
-    if cfg!(windows) {
-        c == '/' || c == '\\'
-    } else {
-        c == '/'
-    }
 }
 
 /// # Special symbols
@@ -294,20 +287,34 @@ mod tests {
 
     #[test]
     fn test_parse_base() {
-        // All platforms
-        assert_eq!(parse("/home").unwrap(), pattern("/home", Empty));
-        assert_eq!(parse("/home/*").unwrap(), pattern("/home/", Star));
-        assert_eq!(parse("///").unwrap(), pattern("///", Empty));
-        assert_eq!(parse("//Host/share/*").unwrap(), pattern("//Host/share/", Star));
-        assert_eq!(parse("./*").unwrap(), pattern("./", Star));
         assert_eq!(parse("..").unwrap(), pattern("..", Empty));
 
-        // Windows only
+        #[cfg(not(windows))]
+        {
+            assert_eq!(parse("/home").unwrap(), pattern("/home", Empty));
+            assert_eq!(parse("/home/*").unwrap(), pattern("/home/", Star));
+            assert_eq!(parse("///").unwrap(), pattern("///", Empty));
+            assert_eq!(parse("//Host/share/*").unwrap(), pattern("//Host/share/", Star));
+            assert_eq!(parse("./*").unwrap(), pattern("./", Star));
+
+            assert_eq!(parse(r".\*").unwrap(), pattern("", Sequence(vec![Char('.'), Char('\\'), Star])));
+            assert_eq!(parse(r"C:*").unwrap(), pattern("", Sequence(Char('C'), Char(':'), Star)));
+        }
+
         #[cfg(windows)]
         {
+            assert_eq!(parse("/home").unwrap(), pattern(r"\home", Empty));
+            assert_eq!(parse("/home/*").unwrap(), pattern(r"\home\", Star));
+            assert_eq!(parse("///").unwrap(), pattern(r"\\\", Empty));
+            assert_eq!(parse("//Host/share/*").unwrap(), pattern(r"\\Host\share\", Star));
+            assert_eq!(parse("./*").unwrap(), pattern(r".\", Star));
+
+            assert_eq!(parse(r".\\*").unwrap(), pattern(r".\", Star));
+            assert_eq!(parse(r"C:*").unwrap(), pattern("C:", Star));
+
             assert_eq!(parse(r"C:\\").unwrap(), pattern(r"C:\", Empty));
             assert_eq!(parse(r"C:\\Program Files\\").unwrap(), pattern(r"C:\Program Files\", Empty));
-            assert_eq!(parse("C:/").unwrap(), pattern("C:/", Empty));
+            assert_eq!(parse("C:/").unwrap(), pattern(r"C:\", Empty));
             assert_eq!(parse(r"\\\\Host\\share\\*").unwrap(), pattern(r"\\Host\share\", Star));
         }
     }
