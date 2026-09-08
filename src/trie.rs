@@ -1,6 +1,6 @@
 use fnv::FnvHashMap;
 
-pub type Id = u32;
+pub type TrieId = u32;
 pub type Char = char;
 
 #[derive(Debug)]
@@ -18,8 +18,8 @@ impl Default for TrieNode {
 #[derive(Debug)]
 enum Children {
     Empty,
-    Singleton(Char, Id),
-    Full(Box<FnvHashMap<Char, Id>>),
+    Singleton(Char, TrieId),
+    Full(Box<FnvHashMap<Char, TrieId>>),
 }
 
 impl Default for Children {
@@ -29,7 +29,7 @@ impl Default for Children {
 }
 
 impl Children {
-    fn insert(&mut self, c: Char, next: Id) {
+    fn insert(&mut self, c: Char, next: TrieId) {
         match self {
             Self::Empty => {
                 *self = Self::Singleton(c, next);
@@ -46,7 +46,7 @@ impl Children {
         };
     }
 
-    fn get(&self, c: Char) -> Option<Id> {
+    fn get(&self, c: Char) -> Option<TrieId> {
         match self {
             Self::Empty => None,
             &Self::Singleton(x, next) if x == c => Some(next),
@@ -59,7 +59,7 @@ impl Children {
 #[derive(Debug)]
 pub struct Trie<T> {
     nodes: Vec<TrieNode>,
-    values: FnvHashMap<Id, T>,
+    values: FnvHashMap<TrieId, T>,
 }
 
 impl<T> Trie<T> {
@@ -81,12 +81,12 @@ impl<T> Trie<T> {
                 cur = next as usize;
             } else {
                 let next = self.nodes.len();
-                self.nodes[cur].children.insert(ch, next as Id);
+                self.nodes[cur].children.insert(ch, next as TrieId);
                 self.nodes.push(TrieNode::default());
                 cur = next;
             }
         }
-        self.values.insert(cur as Id, value);
+        self.values.insert(cur as TrieId, value);
     }
 
     // Useful for testing
@@ -96,7 +96,7 @@ impl<T> Trie<T> {
             let next = self.nodes[cur].children.get(ch)?;
             cur = next as usize;
         }
-        self.values.get(&(cur as Id))
+        self.values.get(&(cur as TrieId))
     }
 }
 

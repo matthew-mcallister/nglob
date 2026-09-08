@@ -1,5 +1,6 @@
 mod pattern;
 mod nfa;
+mod search;
 mod trie;
 
 #[cfg(test)]

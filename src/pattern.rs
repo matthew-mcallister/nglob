@@ -297,8 +297,8 @@ mod tests {
             assert_eq!(parse("//Host/share/*").unwrap(), pattern("//Host/share/", Star));
             assert_eq!(parse("./*").unwrap(), pattern("./", Star));
 
-            assert_eq!(parse(r".\*").unwrap(), pattern("", Sequence(vec![Char('.'), Char('\\'), Star])));
-            assert_eq!(parse(r"C:*").unwrap(), pattern("", Sequence(Char('C'), Char(':'), Star)));
+            assert_eq!(parse(r".\\*").unwrap(), pattern("", Sequence(vec![Char('.'), Char('\\'), Star])));
+            assert_eq!(parse(r"C:*").unwrap(), pattern("", Sequence(vec![Char('C'), Char(':'), Star])));
         }
 
         #[cfg(windows)]
