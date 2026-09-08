@@ -1,8 +1,10 @@
+use std::fmt::Write;
+use std::ops::Index;
 use std::path::is_separator;
 
 use smallvec::SmallVec;
 
-use crate::pattern::Ast;
+use crate::pattern::{Ast, is_escape_char};
 
 pub type StateId = u16;
 
@@ -68,8 +70,26 @@ pub type Transition = TransitionRule;
 #[derive(Debug, Default)]
 pub struct State {
     pub transitions: SmallVec<[Transition; 1]>,
-    // True if the state has any non-epsilon transition, or is terminal
     pub is_epsilon_frontier: bool,
+}
+
+impl State {
+    // Debug code
+    pub fn show_accepts(&self) -> String {
+        let mut out = String::new();
+        for t in self.transitions.iter() {
+            let _ = match t {
+                TransitionRule::Epsilon(_)
+                | TransitionRule::WildEpsilon(_) => write!(out, "ε"),
+                &TransitionRule::Char(c, _) if is_escape_char(c) => write!(out, "\\{c}"),
+                TransitionRule::Char(c, _) => write!(out, "{c}"),
+                TransitionRule::Sep(_) => write!(out, "{}", std::path::MAIN_SEPARATOR),
+                TransitionRule::Wildcard(_) => write!(out, "?"),
+                TransitionRule::Any(_) => write!(out, "**"),
+            };
+        }
+        out
+    }
 }
 
 #[derive(Debug)]
@@ -101,8 +121,12 @@ impl StateMachine {
         state.transitions.push(transition);
     }
 
+    pub fn transitions(&self, from: StateId) -> impl Iterator<Item = &'_ Transition> + '_ {
+        self.states[from as usize].transitions.iter()
+    }
+
     #[cfg(test)]
-    pub fn transitions(&self, from: StateId, to: StateId) -> Vec<Transition> {
+    pub fn between(&self, from: StateId, to: StateId) -> Vec<Transition> {
         self.states[from as usize].transitions.iter()
             .filter(|t| t.next() == to)
             .cloned()
@@ -115,6 +139,14 @@ impl StateMachine {
 
     pub fn terminal(&self) -> StateId {
         1
+    }
+}
+
+impl Index<StateId> for StateMachine {
+    type Output = State;
+
+    fn index(&self, index: StateId) -> &Self::Output {
+        &self.states[index as usize]
     }
 }
 
@@ -175,41 +207,41 @@ mod tests {
     #[test]
     fn test_compile() {
         let sm = machine("");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Epsilon(1)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Epsilon(1)]);
 
         let sm = machine("a");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Char('a', 1)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Char('a', 1)]);
 
         let sm = machine("/");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Sep(1)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Sep(1)]);
 
         let sm = machine("?");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Wildcard(1)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Wildcard(1)]);
 
         let sm = machine("*");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Wildcard(1), Transition::WildEpsilon(1)]);
-        assert_eq!(sm.transitions(1, 0), vec![Transition::WildEpsilon(0)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Wildcard(1), Transition::WildEpsilon(1)]);
+        assert_eq!(sm.between(1, 0), vec![Transition::WildEpsilon(0)]);
 
         let sm = machine("**");
-        assert_eq!(sm.transitions(0, 1), vec![Transition::Any(1), Transition::WildEpsilon(1)]);
-        assert_eq!(sm.transitions(1, 0), vec![Transition::WildEpsilon(0)]);
+        assert_eq!(sm.between(0, 1), vec![Transition::Any(1), Transition::WildEpsilon(1)]);
+        assert_eq!(sm.between(1, 0), vec![Transition::WildEpsilon(0)]);
 
         let sm = machine("abc");
-        assert_eq!(sm.transitions(0, 2), vec![Transition::Char('a', 2)]);
-        assert_eq!(sm.transitions(2, 3), vec![Transition::Char('b', 3)]);
-        assert_eq!(sm.transitions(3, 1), vec![Transition::Char('c', 1)]);
+        assert_eq!(sm.between(0, 2), vec![Transition::Char('a', 2)]);
+        assert_eq!(sm.between(2, 3), vec![Transition::Char('b', 3)]);
+        assert_eq!(sm.between(3, 1), vec![Transition::Char('c', 1)]);
 
         let sm = machine("{a,b}");
         assert_eq!(
-            sm.transitions(0, 1),
+            sm.between(0, 1),
             vec![Transition::Char('a', 1), Transition::Char('b', 1)]
         );
 
         let sm = machine("{ab,cd}");
-        assert_eq!(sm.transitions(0, 2), vec![Transition::Char('a', 2)]);
-        assert_eq!(sm.transitions(2, 1), vec![Transition::Char('b', 1)]);
-        assert_eq!(sm.transitions(0, 3), vec![Transition::Char('c', 3)]);
-        assert_eq!(sm.transitions(3, 1), vec![Transition::Char('d', 1)]);
-        assert_eq!(sm.transitions(0, 1), vec![]);
+        assert_eq!(sm.between(0, 2), vec![Transition::Char('a', 2)]);
+        assert_eq!(sm.between(2, 1), vec![Transition::Char('b', 1)]);
+        assert_eq!(sm.between(0, 3), vec![Transition::Char('c', 3)]);
+        assert_eq!(sm.between(3, 1), vec![Transition::Char('d', 1)]);
+        assert_eq!(sm.between(0, 1), vec![]);
     }
 }

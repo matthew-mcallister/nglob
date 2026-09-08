@@ -1,11 +1,14 @@
+use std::collections::hash_map;
+use std::iter::{FusedIterator, Once};
+
 use fnv::FnvHashMap;
 
 pub type TrieId = u32;
 pub type Char = char;
 
 #[derive(Debug)]
-struct TrieNode {
-    children: Children,
+pub struct TrieNode {
+    pub children: Children,
 }
 
 impl Default for TrieNode {
@@ -14,7 +17,25 @@ impl Default for TrieNode {
     }
 }
 
-// TODO maybe: Squeeze this down from 16 bytes to 8
+impl TrieNode {
+    // Debug code
+    pub fn show_accepts(&self) -> String {
+        fn write_escaped(w: &mut impl std::fmt::Write, c: char) {
+            if c == '"' {
+                let _ = write!(w, "\\\"");
+            } else {
+                let _ = write!(w, "{}", c);
+            }
+        }
+        let mut out = String::new();
+        for (c, _) in self.children.iter() {
+            write_escaped(&mut out, c);
+        }
+        out
+    }
+}
+
+// TODO maybe: Squeeze this down  to 8 bytes from 16
 #[derive(Debug)]
 enum Children {
     Empty,
@@ -54,12 +75,50 @@ impl Children {
             Self::Full(map) => map.get(&c).copied(),
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Char, TrieId)> + '_ {
+        #[derive(Debug)]
+        enum Iter<'a> {
+            Empty,
+            Singleton(Once<(Char, TrieId)>),
+            Full(hash_map::Iter<'a, Char, TrieId>),
+        }
+
+        impl<'a> Iterator for Iter<'a> {
+            type Item = (Char, TrieId);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    Iter::Empty => None,
+                    Iter::Singleton(inner) => inner.next(),
+                    Iter::Full(inner) => inner.next().map(|(k, v)| (*k, *v)),
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                match self {
+                    Iter::Empty => (0, Some(0)),
+                    Iter::Singleton(inner) => inner.size_hint(),
+                    Iter::Full(inner) => inner.size_hint(),
+                }
+            }
+        }
+
+        impl<'a> FusedIterator for Iter<'a> {}
+        impl<'a> ExactSizeIterator for Iter<'a> {}
+
+        match self {
+            Children::Empty => Iter::Empty,
+            &Children::Singleton(c, id) => Iter::Singleton(std::iter::once((c, id))),
+            Children::Full(hash_map) => Iter::Full(hash_map.iter()),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct Trie<T> {
-    nodes: Vec<TrieNode>,
-    values: FnvHashMap<TrieId, T>,
+    pub nodes: Vec<TrieNode>,
+    pub values: FnvHashMap<TrieId, T>,
 }
 
 impl<T> Trie<T> {
@@ -72,6 +131,10 @@ impl<T> Trie<T> {
             ],
             values: Default::default(),
         }
+    }
+
+    pub fn root(&self) -> TrieId {
+        0
     }
 
     pub fn insert(&mut self, key: &str, value: T) {
@@ -97,6 +160,14 @@ impl<T> Trie<T> {
             cur = next as usize;
         }
         self.values.get(&(cur as TrieId))
+    }
+
+    pub fn get_value(&self, id: TrieId) -> Option<&T> {
+        self.values.get(&id)
+    }
+
+    pub fn children(&self, id: TrieId) -> impl Iterator<Item = (Char, TrieId)> + '_ {
+        self.nodes[id as usize].children.iter()
     }
 }
 

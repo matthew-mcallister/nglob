@@ -21,6 +21,10 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+pub fn is_escape_char(c: char) -> bool {
+    matches!(c, '\\' | '?' | '*' | '{' | '}' | ',')
+}
+
 // Distinguishes escaped and unescaped chars
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 enum Token {
