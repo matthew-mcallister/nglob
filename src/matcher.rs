@@ -217,6 +217,51 @@ use super::*;
         match_string(&machine(pattern), target)
     }
 
+    fn match_many<'p, 't>(pattern: &'p str, targets: &[&'t str]) -> Vec<&'t str> {
+        let mut trie = Trie::new();
+        for target in targets {
+            trie.insert(*target, *target);
+        }
+        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie)
+            .into_iter()
+            .copied()
+            .collect();
+        matches.sort_unstable();
+        matches
+    }
+
+    #[test]
+    fn test_match_many() {
+        assert_eq!(
+            match_many("*.rs", &["main.rs", "lib.rs", "src", "a/b.rs"]),
+            ["lib.rs", "main.rs"]
+        );
+        assert_eq!(
+            match_many("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
+            ["src/a/b.rs", "src/b.rs", "src/main.rs"]
+        );
+        assert_eq!(
+            match_many("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
+            ["a//b", "a/b", "a/x/b"]
+        );
+        assert_eq!(
+            match_many("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
+            ["a", "c.rs", "main.rs"]
+        );
+        assert_eq!(
+            match_many("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
+            ["x/b", "x/y/b"]
+        );
+        assert_eq!(
+            match_many("a*b", &["ab", "axxb", "a/b"]),
+            ["ab", "axxb"]
+        );
+        assert_eq!(
+            match_many(r"\*", &["*", "**"]),
+            ["*"]
+        );
+    }
+
     #[test]
     fn test_match() {
         assert!(matches("", ""));
@@ -286,5 +331,9 @@ use super::*;
         assert!(matches("*/.", "a/."));
         assert!(matches("src/**/*.rs", "src/a/b.rs"));
         assert!(!matches("src/**/*.rs", "src.rs"));
+
+        assert!(matches("a/**/b", "a/b"));
+        assert!(matches("a/b", "a//b"));
     }
+
 }
