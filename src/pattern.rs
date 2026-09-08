@@ -1,6 +1,7 @@
-use std::iter::{FusedIterator, Peekable};
+use std::fmt::Write;
+use std::iter::FusedIterator;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
     InvalidEscape(char),
     IncompleteEscape,
@@ -29,13 +30,33 @@ enum Token {
     Comma,
     Lbrace,
     Rbrace,
+    Sep,
+}
+
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::Char(c) => write!(f, "{}", c),
+            Token::Question => write!(f, "?"),
+            Token::Star => write!(f, "*"),
+            Token::StarStar => write!(f, "**"),
+            Token::Comma => write!(f, ","),
+            Token::Lbrace => write!(f, "{{"),
+            Token::Rbrace => write!(f, "}}"),
+            Token::Sep => write!(f, "{}", std::path::MAIN_SEPARATOR),
+        }
+    }
 }
 
 fn next_token(input: &mut &str) -> Result<Option<Token>, ParseError> {
     let mut chars = input.chars();
     let tok = match chars.next() {
         Some('\\') => match chars.next() {
-            Some(c @ ('*' | '?' | '{' | '}' | ',' | '\\')) => Token::Char(c),
+            Some(c @ ('*' | '?' | '{' | '}' | ',')) => Token::Char(c),
+            #[cfg(windows)]
+            Some('\\') => Token::Sep,
+            #[cfg(not(windows))]
+            Some('\\') => Token::Char('\\'),
             Some(c) => return Err(ParseError::InvalidEscape(c)),
             None => return Err(ParseError::IncompleteEscape),
         }
@@ -49,6 +70,7 @@ fn next_token(input: &mut &str) -> Result<Option<Token>, ParseError> {
         Some(',') => Token::Comma,
         Some('{') => Token::Lbrace,
         Some('}') => Token::Rbrace,
+        Some(c) if is_sep(c) => Token::Sep,
         Some(c) => Token::Char(c),
         None => return Ok(None),
     };
@@ -71,22 +93,29 @@ impl<'a> Iterator for Tokens<'a> {
 
 impl<'a> FusedIterator for Tokens<'a> {}
 
+impl<'a> Tokens<'a> {
+    fn peek(&self) -> Option<Result<Token, ParseError>> {
+        self.clone().next()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum AstNode {
+enum Ast {
     Empty,
     Char(char),
-    Sequence(Vec<AstNode>),
-    Alternative(Vec<AstNode>), // {xxx,yyy,...}
+    Sep,
+    Sequence(Vec<Ast>),
+    Alternative(Vec<Ast>), // {xxx,yyy,...}
     Wildcard,   // ?
     Star,       // *
     StarStar,   // **
 }
 
-fn is_sep(b: u8) -> bool {
+fn is_sep(c: char) -> bool {
     if cfg!(windows) {
-        b == b'/' || b == b'\\'
+        c == '/' || c == '\\'
     } else {
-        b == b'/'
+        c == '/'
     }
 }
 
@@ -109,29 +138,51 @@ fn is_sep(b: u8) -> bool {
 /// On Windows, both `/` and `\\` will be accepted as separators
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pattern {
-    prefix: String,
-    root: AstNode,
+    /// Base directory for search
+    pub base: String,
+    /// Root of AST
+    pub root: Ast,
 }
 
-// Parse windows drive prefix (e.g. C:)
-fn parse_drive(input: &mut &str) -> String {
-    let mut buf = String::new();
-    if cfg!(windows) {
-        if let Some(b':') = input.as_bytes().get(1) {
-            buf.push_str(&input[..2]);
-            *input = &input[2..];
+#[cfg(windows)]
+fn is_prefix_sep(c: char) -> bool {
+    c == ':'
+}
+
+#[cfg(not(windows))]
+fn is_prefix_sep(_: char) -> bool {
+    false
+}
+
+// Returns a filepath to use as the search base. Looks for the longest literal
+// string starting from the beginning that ends in / (or : or \ on Windows).
+// This skips a lot of unnecessary reads and handles drive prefixes and UNC on
+// Windows.
+fn parse_base(input: &mut Tokens<'_>) -> Result<String, ParseError> {
+    let mut prefix = String::new();
+    let mut buffer = String::new();
+    let mut lookahead = input.clone();
+    loop {
+        let Some(tok) = lookahead.next().transpose()? else {
+            *input = lookahead.clone();
+            prefix.push_str(&buffer);
+            return Ok(prefix);
+        };
+
+        let flush = match tok {
+            Token::Sep => true,
+            Token::Char(c) if is_prefix_sep(c) => true,
+            Token::Char(_) => false,
+            _ => return Ok(prefix),
+        };
+        let _ = write!(&mut buffer, "{}", tok);
+
+        if flush {
+            *input = lookahead.clone();
+            prefix.push_str(&buffer);
+            buffer.clear();
         }
     }
-    buf
-}
-
-fn parse_prefix(input: &mut &str) -> String {
-    let mut buf = parse_drive(input);
-    while let Some(&b) = input.as_bytes().first() && is_sep(b) {
-        buf.push(b as char);
-        *input = &input[1..];
-    }
-    buf
 }
 
 // Parses nodes until reaching a stopping condition or end of input.
@@ -139,39 +190,40 @@ fn parse_prefix(input: &mut &str) -> String {
 // Will return `Empty` or a single node instead of returning a Sequence node
 // with 0 or 1 elements.
 fn parse_sequence(
-    tokens: &mut Peekable<Tokens>,
+    tokens: &mut Tokens,
     mut stop: impl FnMut(&Token) -> bool,
-) -> Result<AstNode, ParseError> {
+) -> Result<Ast, ParseError> {
     let mut nodes = Vec::new();
     loop {
         nodes.push(match tokens.peek() {
             None => break,
             Some(Err(_)) => return Err(tokens.next().unwrap().unwrap_err()),
-            Some(Ok(tok)) if stop(tok) => break,
+            Some(Ok(tok)) if stop(&tok) => break,
             Some(Ok(_)) => parse_node(tokens)?,
         });
     }
     Ok(match nodes.len() {
-        0 => AstNode::Empty,
+        0 => Ast::Empty,
         1 => nodes.pop().unwrap(),
-        _ => AstNode::Sequence(nodes),
+        _ => Ast::Sequence(nodes),
     })
 }
 
-fn parse_node(tokens: &mut Peekable<Tokens>) -> Result<AstNode, ParseError> {
+fn parse_node(tokens: &mut Tokens) -> Result<Ast, ParseError> {
     let tok = tokens.next().unwrap().unwrap();
     Ok(match tok {
-        Token::Char(c) => AstNode::Char(c),
-        Token::Question => AstNode::Wildcard,
-        Token::Star => AstNode::Star,
-        Token::StarStar => AstNode::StarStar,
+        Token::Char(c) => Ast::Char(c),
+        Token::Sep => Ast::Sep,
+        Token::Question => Ast::Wildcard,
+        Token::Star => Ast::Star,
+        Token::StarStar => Ast::StarStar,
         Token::Lbrace => parse_alternative(tokens)?,
-        Token::Comma => AstNode::Char(','),
-        Token::Rbrace => AstNode::Char('}'),
+        Token::Comma => Ast::Char(','),
+        Token::Rbrace => Ast::Char('}'),
     })
 }
 
-fn parse_alternative(tokens: &mut Peekable<Tokens>) -> Result<AstNode, ParseError> {
+fn parse_alternative(tokens: &mut Tokens) -> Result<Ast, ParseError> {
     let mut branches = Vec::new();
     loop {
         let stop = |tok: &Token| matches!(tok, Token::Comma | Token::Rbrace);
@@ -184,15 +236,15 @@ fn parse_alternative(tokens: &mut Peekable<Tokens>) -> Result<AstNode, ParseErro
             None => return Err(ParseError::UnclosedDelimiter('{')),
         }
     }
-    Ok(AstNode::Alternative(branches))
+    Ok(Ast::Alternative(branches))
 }
 
-pub fn parse(mut input: &str) -> Result<Pattern, ParseError> {
-    let prefix = parse_prefix(&mut input);
-    let mut input = Tokens { input }.peekable();
+pub fn parse(input: &str) -> Result<Pattern, ParseError> {
+    let mut input = Tokens { input };
+    let base = parse_base(&mut input)?;
     let root = parse_sequence(&mut input, |_| false)?;
     Ok(Pattern {
-        prefix,
+        base,
         root,
     })
 }
@@ -201,50 +253,59 @@ pub fn parse(mut input: &str) -> Result<Pattern, ParseError> {
 mod tests {
     use super::*;
 
-    use AstNode as A;
+    use Ast::*;
 
-    fn chars(s: &str) -> A {
-        match s.chars().collect::<Vec<_>>()[..] {
-            [] => A::Empty,
-            [c] => A::Char(c),
-            _ => A::Sequence(s.chars().map(A::Char).collect()),
+    fn parse_seq(s: &str) -> Ast {
+        parse_sequence(&mut Tokens { input: s }, |_| false).unwrap()
+    }
+
+    fn pattern(base: &str, root: Ast) -> Pattern {
+        Pattern {
+            base: base.into(),
+            root,
         }
     }
 
     #[test]
     fn test_parse() {
-        assert_eq!(parse("").unwrap().root, A::Empty);
-        assert_eq!(parse("a").unwrap().root, A::Char('a'));
-        assert_eq!(parse("abc").unwrap().root, chars("abc"));
-        assert_eq!(parse(",}").unwrap().root, chars(",}"));
+        assert_eq!(parse_seq(""), Empty);
+        assert_eq!(parse_seq("a"), Char('a'));
+        assert_eq!(parse_seq("abc"), Sequence(vec![Char('a'), Char('b'), Char('c')]));
+        assert_eq!(parse_seq(",}"), Sequence(vec![Char(','), Char('}')]));
+        assert_eq!(parse_seq("a*b"), Sequence(vec![Char('a'), Star, Char('b')]));
+        assert_eq!(parse_seq("a**b"), Sequence(vec![Char('a'), StarStar, Char('b')]));
+        assert_eq!(parse_seq("a***b"), Sequence(vec![Char('a'), StarStar, Star, Char('b')]));
+        assert_eq!(parse_seq("{,a,*}"), Alternative(vec![Empty, Char('a'), Star]));
         assert_eq!(
-            parse("a*b").unwrap().root,
-            A::Sequence(vec![A::Char('a'), A::Star, A::Char('b')])
-        );
-        assert_eq!(
-            parse("a**b").unwrap().root,
-            A::Sequence(vec![A::Char('a'), A::StarStar, A::Char('b')])
-        );
-        assert_eq!(
-            parse("a***b").unwrap().root,
-            A::Sequence(vec![A::Char('a'), A::StarStar, A::Star, A::Char('b')])
-        );
-        assert_eq!(
-            parse("{,a,*}").unwrap().root,
-            A::Alternative(vec![A::Empty, A::Char('a'), A::Star])
-        );
-        assert_eq!(
-            parse("{{a,b},{c,d}}").unwrap().root,
-            A::Alternative(vec![
-                A::Alternative(vec![A::Char('a'), A::Char('b')]),
-                A::Alternative(vec![A::Char('c'), A::Char('d')]),
+            parse_seq("{{a,b},{c,d}}"),
+            Alternative(vec![
+                Alternative(vec![Char('a'), Char('b')]),
+                Alternative(vec![Char('c'), Char('d')]),
             ])
         );
-        assert_eq!(
-            parse("./*").unwrap().root,
-            A::Sequence(vec![A::Char('.'), A::Char('/'), A::Star])
-        );
-        assert_eq!(parse("..").unwrap().root, chars(".."));
+        assert_eq!(parse_seq("./*"), Sequence(vec![Char('.'), Sep, Star]));
+        assert_eq!(parse_seq("*/."), Sequence(vec![Star, Sep, Char('.')]));
+        assert_eq!(parse_seq(".."), Sequence(vec![Char('.'), Char('.')]));
+    }
+
+    #[test]
+    fn test_parse_base() {
+        // All platforms
+        assert_eq!(parse("/home").unwrap(), pattern("/home", Empty));
+        assert_eq!(parse("/home/*").unwrap(), pattern("/home/", Star));
+        assert_eq!(parse("///").unwrap(), pattern("///", Empty));
+        assert_eq!(parse("//Host/share/*").unwrap(), pattern("//Host/share/", Star));
+        assert_eq!(parse("./*").unwrap(), pattern("./", Star));
+        assert_eq!(parse("..").unwrap(), pattern("..", Empty));
+
+        // Windows only
+        #[cfg(windows)]
+        {
+            assert_eq!(parse(r"C:\\").unwrap(), pattern(r"C:\", Empty));
+            assert_eq!(parse(r"C:\\Program Files\\").unwrap(), pattern(r"C:\Program Files\", Empty));
+            assert_eq!(parse("C:/").unwrap(), pattern("C:/", Empty));
+            assert_eq!(parse(r"\\\\Host\\share\\*").unwrap(), pattern(r"\\Host\share\", Star));
+        }
     }
 
     #[test]
@@ -253,34 +314,5 @@ mod tests {
         assert_eq!(parse("{,").unwrap_err(), ParseError::UnclosedDelimiter('{'));
         assert_eq!(parse(r"\a").unwrap_err(), ParseError::InvalidEscape('a'));
         assert_eq!(parse(r"\").unwrap_err(), ParseError::IncompleteEscape);
-    }
-
-    #[test]
-    fn test_prefix() {
-        assert_eq!(parse("/").unwrap().prefix, "/");
-        assert_eq!(parse("/home").unwrap().prefix, "/");
-        assert_eq!(parse("//").unwrap().prefix, "//");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_prefix_windows() {
-        assert_eq!(parse(r"\\").unwrap().prefix, r"\\");
-        assert_eq!(parse(r"\\\\").unwrap().prefix, r"\\\\");
-        assert_eq!(parse("c:").unwrap().prefix, "c:");
-        assert_eq!(parse("c:/").unwrap().prefix, "c:/");
-        assert_eq!(parse(r"c:\\").unwrap().prefix, r"c:\\");
-        assert_eq!(parse(r"c:\\User\\").unwrap().prefix, r"c:\\User\\");
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn test_prefix_unix() {
-        assert_eq!(parse(r"\\").unwrap().prefix, "");
-        assert_eq!(parse(r"\\\\").unwrap().prefix, "");
-        assert_eq!(parse("c:").unwrap().prefix, "");
-        assert_eq!(parse("c:/").unwrap().prefix, "");
-        assert_eq!(parse(r"c:\\").unwrap().prefix, "");
-        assert_eq!(parse(r"c:\\User\\").unwrap().prefix, "");
     }
 }

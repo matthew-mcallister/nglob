@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 fnv = "1.0.7"
+smallvec = "1.16.0"
