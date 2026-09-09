@@ -33,8 +33,9 @@ impl MatcherState {
 struct StateInfo {
     // true when the previously matched character was a separator. This allows
     // additional redundant separators in the pattern to be skipped.
+    // TODO: Move this to the trie?
     have_sep: bool,
-    // true when only literals were matched and no ?/*/**
+    // true when only literals were matched and never ?/*/**
     is_literal: bool,
 }
 
@@ -206,7 +207,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             }
             let _ = write!(
                 out,
-                r#"({} "{}", {} "{}"{}{})"#,
+                r#"(t{} "{}", s{} "{}"{}{})"#,
                 s.trie,
                 self.trie.nodes[s.trie as usize].show_accepts(),
                 s.nfa,
@@ -410,6 +411,13 @@ use super::*;
         assert!(is_literal_match("{a,?}", "a"));
         assert!(!is_literal_match("{a,?}", "b"));
 
+        assert!(!is_literal_match("*", "."));
+        assert!(!is_literal_match("**", "."));
+        assert!(!is_literal_match(".*", "."));
+        assert!(!is_literal_match("*", ".."));
+        assert!(!is_literal_match("**", ".."));
+        assert!(!is_literal_match(".*", ".."));
+
         assert!(!is_literal_match("*", ""));
         assert!(!is_literal_match("*", "abc"));
         assert!(!is_literal_match("a*", "a"));
@@ -445,8 +453,10 @@ use super::*;
     }
 
     #[test]
+    #[should_panic]
     fn test_match_literal_ambiguous() {
-        assert!(!is_literal_match("{*,abd}", "abc"));
+        assert!(matches("{??c,abd}", "abc"));
+        assert!(!is_literal_match("{??c,abd}", "abc"));
     }
 
     #[test]

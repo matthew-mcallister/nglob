@@ -8,7 +8,7 @@ pub type Char = char;
 
 #[derive(Debug)]
 pub struct TrieNode {
-    pub children: Children,
+    children: Children,
 }
 
 impl Default for TrieNode {
@@ -35,7 +35,7 @@ impl TrieNode {
     }
 }
 
-// TODO maybe: Squeeze this down  to 8 bytes from 16
+// TODO maybe: Squeeze this down to 8 bytes from 16
 #[derive(Debug)]
 enum Children {
     Empty,
