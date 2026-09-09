@@ -29,17 +29,29 @@ impl MatcherState {
 // Extra state data we track outside the state graph. All of this machinery can
 // be formalized in terms of pure state graphs, but it is more practical to
 // implement using external tracking.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StateInfo {
     // true when the previously matched character was a separator. This allows
     // additional redundant separators in the pattern to be skipped.
     have_sep: bool,
+    // true when only literals were matched and no ?/*/**
+    is_literal: bool,
+}
+
+impl Default for StateInfo {
+    fn default() -> Self {
+        Self {
+            have_sep: false,
+            is_literal: true,
+        }
+    }
 }
 
 impl StateInfo {
-    fn update(self, c: char) -> Self {
+    fn update(self, c: Option<char>, transition: &TransitionRule) -> Self {
         Self {
-            have_sep: is_separator(c),
+            have_sep: c.map(is_separator).unwrap_or(self.have_sep),
+            is_literal: self.is_literal && transition.is_literal(),
         }
     }
 }
@@ -56,6 +68,7 @@ fn merge_state(
         Entry::Occupied(mut entry) => {
             let merged = StateInfo {
                 have_sep: entry.get().have_sep || info.have_sep,
+                is_literal: entry.get().is_literal || info.is_literal,
             };
             if merged == *entry.get() {
                 return None;
@@ -70,6 +83,12 @@ fn merge_state(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Accepted {
+    pub trie_id: TrieId,
+    pub is_literal: bool,
+}
+
 #[derive(Debug)]
 struct Matcher<'m, 't, T> {
     machine: &'m StateMachine,
@@ -77,7 +96,7 @@ struct Matcher<'m, 't, T> {
     states: StateSet,
     new_states: StateSet, // Reuse memory
     queue: Vec<(MatcherState, StateInfo)>, // Reuse memory
-    accepted: Vec<TrieId>,
+    accepted: Vec<Accepted>,
 }
 
 impl<'m, 't, T> Matcher<'m, 't, T> {
@@ -122,11 +141,11 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             for t in machine.transitions(s.nfa) {
                 match t {
                     TransitionRule::Epsilon(next) | TransitionRule::WildEpsilon(next) => {
-                        push_state(queue, s.with_nfa(*next), info);
+                        push_state(queue, s.with_nfa(*next), info.update(None, t));
                     }
                     // Separator in target can skip multiple separators in pattern
                     TransitionRule::Sep(next) if info.have_sep => {
-                        push_state(queue, s.with_nfa(*next), info);
+                        push_state(queue, s.with_nfa(*next), info.update(None, t));
                     }
                     _ => {}
                 }
@@ -144,11 +163,13 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     // These states are still live but the terminal state has no transitions so
     // they will be cleared out right away.
     fn record_accepted(&mut self) {
-        for &state in self.states.keys() {
-            if self.trie.get_value(state.trie).is_some()
-                && state.nfa == self.machine.terminal()
-            {
-                self.accepted.push(state.trie);
+        let terminal = self.machine.terminal();
+        for (&state, &info) in self.states.iter() {
+            if state.nfa == terminal && self.trie.get_value(state.trie).is_some() {
+                self.accepted.push(Accepted {
+                    trie_id: state.trie,
+                    is_literal: info.is_literal,
+                });
             }
         }
     }
@@ -158,14 +179,13 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         let new_states = &mut self.new_states;
         for (&s, info) in self.states.iter() {
             for (c, next_trie) in self.trie.children(s.trie) {
-                let next_info = info.update(c);
                 for t in self.machine.transitions(s.nfa) {
                     let next = MatcherState { nfa: t.next(), trie: next_trie };
                     if t.is_epsilon() {
                         test_log!("{c},{next},{t:?}... skipped");
                     } else if t.matches(c) {
                         test_log!("{c},{next},{t:?}... matched");
-                        merge_state(new_states, next, next_info);
+                        merge_state(new_states, next, info.update(Some(c), t));
                     } else {
                         test_log!("{c},{next},{t:?}... failed");
                     }
@@ -186,12 +206,13 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             }
             let _ = write!(
                 out,
-                r#"({} "{}", {} "{}"{})"#,
+                r#"({} "{}", {} "{}"{}{})"#,
                 s.trie,
                 self.trie.nodes[s.trie as usize].show_accepts(),
                 s.nfa,
                 self.machine[s.nfa].show_accepts(),
                 if info.have_sep { " sep" } else { "" },
+                if info.is_literal { "" } else { " wild" },
             );
         }
         let _ = write!(out, "]");
@@ -214,8 +235,8 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         }
     }
 
-    fn accepted<'a>(&'a self) -> impl Iterator<Item = &'t T> + 'a {
-        self.accepted.iter().map(|&id| self.trie.get_value(id).unwrap())
+    fn accepted<'a>(&'a self) -> impl Iterator<Item = Accepted> + 'a {
+        self.accepted.iter().copied()
     }
 }
 
@@ -230,10 +251,13 @@ fn match_string(machine: &StateMachine, target: &str) -> bool {
 fn match_trie<'m, 't, T>(
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
-) -> Vec<&'t T> {
+) -> Vec<(&'t T, bool)> {
     let mut matcher = Matcher::new(machine, trie);
     matcher.run();
-    matcher.accepted().collect()
+    matcher
+        .accepted()
+        .map(|a| (trie.get_value(a.trie_id).unwrap(), a.is_literal))
+        .collect()
 }
 
 #[cfg(test)]
@@ -251,39 +275,50 @@ use super::*;
         match_string(&machine(pattern), target)
     }
 
-    fn match_many<'p, 't>(pattern: &'p str, targets: &[&'t str]) -> Vec<&'t str> {
+    fn match_all_with_lit<'t>(pattern: &str, targets: &[&'t str]) -> Vec<(&'t str, bool)> {
         let mut trie = Trie::new();
         for target in targets {
             trie.insert(*target, *target);
         }
         let mut matches: Vec<_> = match_trie(&machine(pattern), &trie)
             .into_iter()
-            .copied()
+            .map(|(target, is_literal)| (*target, is_literal))
             .collect();
         matches.sort_unstable();
         matches
     }
 
+    fn match_all<'t>(pattern: &str, targets: &[&'t str]) -> Vec<&'t str> {
+        match_all_with_lit(pattern, targets)
+            .into_iter()
+            .map(|(target, _)| target)
+            .collect()
+    }
+
+    fn is_literal_match(pattern: &str, target: &str) -> bool {
+        match_all_with_lit(pattern, &[target]).first().unwrap().1
+    }
+
     #[test]
     fn test_match_many() {
         assert_eq!(
-            match_many("*.rs", &["main.rs", "lib.rs", "src", "a/b.rs"]),
+            match_all("*.rs", &["main.rs", "lib.rs", "src", "a/b.rs"]),
             ["lib.rs", "main.rs"]
         );
         assert_eq!(
-            match_many("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
+            match_all("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
             ["a", "c.rs", "main.rs"]
         );
         assert_eq!(
-            match_many("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
+            match_all("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
             ["x/b", "x/y/b"]
         );
         assert_eq!(
-            match_many("a*b", &["ab", "axxb", "a/b"]),
+            match_all("a*b", &["ab", "axxb", "a/b"]),
             ["ab", "axxb"]
         );
         assert_eq!(
-            match_many(r"\*", &["*", "**"]),
+            match_all(r"\*", &["*", "**"]),
             ["*"]
         );
     }
@@ -360,6 +395,56 @@ use super::*;
     }
 
     #[test]
+    fn test_match_literal() {
+        assert!(is_literal_match("", ""));
+        assert!(is_literal_match("abc", "abc"));
+        assert!(is_literal_match(r"\*", "*"));
+        assert!(is_literal_match(r"a\?c", "a?c"));
+
+        assert!(is_literal_match("a/b", "a/b"));
+        assert!(is_literal_match("a//b", "a/b"));
+        assert!(is_literal_match("a/b", "a//b"));
+
+        assert!(!is_literal_match("?", "a"));
+        assert!(!is_literal_match("a?c", "abc"));
+        assert!(is_literal_match("{a,?}", "a"));
+        assert!(!is_literal_match("{a,?}", "b"));
+
+        assert!(!is_literal_match("*", ""));
+        assert!(!is_literal_match("*", "abc"));
+        assert!(!is_literal_match("a*", "a"));
+        assert!(!is_literal_match("a*", "ab"));
+        assert!(!is_literal_match(".*", "."));
+        assert!(!is_literal_match("*/", "a/"));
+        assert!(!is_literal_match("**", ""));
+        assert!(!is_literal_match("**", "a/b"));
+        assert!(!is_literal_match("a**b", "ab"));
+        assert!(!is_literal_match("**/b", "x/b"));
+        assert!(!is_literal_match("a/**/b", "a/b"));
+
+        assert!(is_literal_match("a{*,b}c", "abc"));
+        assert!(!is_literal_match("a{*,b}c", "ac"));
+        assert!(!is_literal_match("a{*,b}c", "axc"));
+
+        assert_eq!(
+            match_all_with_lit("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
+            [("a", true), ("c.rs", false), ("main.rs", false)]
+        );
+        assert_eq!(
+            match_all_with_lit("a{b,?}c", &["abc", "axc", "abd"]),
+            [("abc", true), ("axc", false)]
+        );
+        assert_eq!(
+            match_all_with_lit("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
+            [("x/b", false), ("x/y/b", false)]
+        );
+        assert_eq!(
+            match_all_with_lit("a/b", &["a/b", "a//b", "ab"]),
+            [("a//b", true), ("a/b", true)]
+        );
+    }
+
+    #[test]
     fn test_star_choice() {
         assert!(!matches("a{*,/}c", "ab/c"));
     }
@@ -379,11 +464,11 @@ use super::*;
         assert!(matches("a/**/b", "a/b"));
         assert!(matches("a{*/,}/b", "asdf/b"));
         assert_eq!(
-            match_many("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
+            match_all("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
             ["src/a/b.rs", "src/b.rs", "src/main.rs"]
         );
         assert_eq!(
-            match_many("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
+            match_all("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
             ["a//b", "a/b", "a/x/b"]
         );
     }
