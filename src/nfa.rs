@@ -156,7 +156,12 @@ pub fn compile(sm: &mut StateMachine, ast: &Ast, initial: StateId, terminal: Sta
     match ast {
         Ast::Empty => sm.connect(initial, Transition::Epsilon(terminal)),
         Ast::Char(c) => sm.connect(initial, Transition::Char(*c, terminal)),
-        Ast::Sep => sm.connect(initial, Transition::Sep(terminal)),
+        Ast::Sep => {
+            let loop_state = sm.new_state();
+            sm.connect(initial, Transition::Sep(loop_state));
+            sm.connect(loop_state, Transition::Sep(loop_state));
+            sm.connect(loop_state, Transition::Epsilon(terminal));
+        }
         Ast::Wildcard => sm.connect(initial, Transition::Wildcard(terminal)),
         Ast::Star | Ast::StarStar => {
             let entry = sm.new_state();
@@ -216,7 +221,9 @@ mod tests {
         assert_eq!(sm.between(0, 1), vec![Transition::Char('a', 1)]);
 
         let sm = machine("/");
-        assert_eq!(sm.between(0, 1), vec![Transition::Sep(1)]);
+        assert_eq!(sm.between(0, 2), vec![Transition::Sep(2)]);
+        assert_eq!(sm.between(2, 2), vec![Transition::Sep(2)]);
+        assert_eq!(sm.between(2, 1), vec![Transition::Epsilon(1)]);
 
         let sm = machine("?");
         assert_eq!(sm.between(0, 1), vec![Transition::Wildcard(1)]);

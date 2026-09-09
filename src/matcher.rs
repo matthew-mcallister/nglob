@@ -331,10 +331,15 @@ use super::*;
     }
 
     #[test]
-    #[ignore]
-    fn test_redundant_separators() {
-        assert!(matches("a/**/b", "a/b"));
+    fn test_multiple_separators_in_target() {
         assert!(matches("a/b", "a//b"));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_multiple_separators_in_pattern() {
+        assert!(matches("a/**/b", "a/b"));
+        assert!(matches("a{*/,}/b", "asdf/b"));
         assert_eq!(
             match_many("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
             ["src/a/b.rs", "src/b.rs", "src/main.rs"]
