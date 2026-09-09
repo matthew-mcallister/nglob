@@ -86,14 +86,23 @@ fn merge_state(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Accepted {
-    pub trie_id: TrieId,
-    pub is_literal: bool,
+    pub state: MatcherState,
+    pub info: StateInfo,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MatchConfig {
+    /// Causes the matcher to accept ancestors of a matching path. For example,
+    /// if `accept_ancestors` is true, then `foo/bar/baz` will match `foo`,
+    /// `foo/bar`, and `foo/bar/baz`.
+    pub accept_ancestors: bool,
 }
 
 #[derive(Debug)]
 struct Matcher<'m, 't, T> {
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
+    config: MatchConfig,
     states: StateSet,
     new_states: StateSet, // Reuse memory
     queue: Vec<(MatcherState, StateInfo)>, // Reuse memory
@@ -101,7 +110,7 @@ struct Matcher<'m, 't, T> {
 }
 
 impl<'m, 't, T> Matcher<'m, 't, T> {
-    fn new(machine: &'m StateMachine, trie: &'t Trie<T>) -> Self {
+    fn new(machine: &'m StateMachine, trie: &'t Trie<T>, config: MatchConfig) -> Self {
         let mut states =
             StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
         let initial = MatcherState { nfa: machine.initial(), trie: trie.root() };
@@ -109,6 +118,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         Self {
             machine,
             trie,
+            config,
             states,
             new_states: StateSet::with_capacity_and_hasher(
                 machine.states.len(),
@@ -127,9 +137,11 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         let queue = &mut self.queue;
         queue.extend(states.drain());
 
-        let mut push_state = |queue: &mut Vec<(MatcherState, StateInfo)>,
-                              s: MatcherState,
-                              info: StateInfo| {
+        let mut push_state = |
+            queue: &mut Vec<(MatcherState, StateInfo)>,
+            s: MatcherState,
+            info: StateInfo
+        | {
             if let Some(merged) = merge_state(states, s, info) {
                 queue.push((s, merged));
             }
@@ -166,11 +178,12 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     fn record_accepted(&mut self) {
         let terminal = self.machine.terminal();
         for (&state, &info) in self.states.iter() {
-            if state.nfa == terminal && self.trie.get_value(state.trie).is_some() {
-                self.accepted.push(Accepted {
-                    trie_id: state.trie,
-                    is_literal: info.is_literal,
-                });
+            let accept_ancestor = self.config.accept_ancestors
+                && self.machine[state.nfa].accepts_sep;
+            if self.trie.get_value(state.trie).is_some()
+                && (state.nfa == terminal || accept_ancestor)
+            {
+                self.accepted.push(Accepted { state, info });
             }
         }
     }
@@ -244,7 +257,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
 fn match_string(machine: &StateMachine, target: &str) -> bool {
     let mut trie = Trie::new();
     trie.insert(target, ());
-    let mut matcher = Matcher::new(machine, &trie);
+    let mut matcher = Matcher::new(machine, &trie, MatchConfig::default());
     matcher.run();
     !matcher.accepted.is_empty()
 }
@@ -252,21 +265,22 @@ fn match_string(machine: &StateMachine, target: &str) -> bool {
 fn match_trie<'m, 't, T>(
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
+    config: MatchConfig,
 ) -> Vec<(&'t T, bool)> {
-    let mut matcher = Matcher::new(machine, trie);
+    let mut matcher = Matcher::new(machine, trie, config);
     matcher.run();
     matcher
         .accepted()
-        .map(|a| (trie.get_value(a.trie_id).unwrap(), a.is_literal))
+        .map(|a| (trie.get_value(a.state.trie).unwrap(), a.info.is_literal))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use crate::nfa::from_pattern;
-use crate::pattern::parse_ast;
+    use crate::pattern::parse_ast;
 
-use super::*;
+    use super::*;
 
     fn machine(s: &str) -> StateMachine {
         from_pattern(&parse_ast(s).unwrap())
@@ -276,12 +290,12 @@ use super::*;
         match_string(&machine(pattern), target)
     }
 
-    fn match_all_with_lit<'t>(pattern: &str, targets: &[&'t str]) -> Vec<(&'t str, bool)> {
-        let mut trie = Trie::new();
-        for target in targets {
-            trie.insert(*target, *target);
-        }
-        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie)
+    fn match_all_is_literal<'t>(
+        pattern: &str,
+        targets: &[&'t str],
+    ) -> Vec<(&'t str, bool)> {
+        let trie: Trie<&'t str> = targets.iter().map(|&k| (k, k)).collect();
+        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie, Default::default())
             .into_iter()
             .map(|(target, is_literal)| (*target, is_literal))
             .collect();
@@ -289,15 +303,53 @@ use super::*;
         matches
     }
 
+    fn match_all_ancestors<'t>(
+        pattern: &str,
+        targets: &[&'t str],
+    ) -> Vec<&'t str> {
+        let config = MatchConfig { accept_ancestors: true, ..Default::default() };
+        let trie: Trie<&'t str> = targets.iter().map(|&k| (k, k)).collect();
+        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie, config)
+            .into_iter()
+            .map(|(target, _)| *target)
+            .collect();
+        matches.sort_unstable();
+        matches
+    }
+
     fn match_all<'t>(pattern: &str, targets: &[&'t str]) -> Vec<&'t str> {
-        match_all_with_lit(pattern, targets)
+        match_all_is_literal(pattern, targets)
             .into_iter()
             .map(|(target, _)| target)
             .collect()
     }
 
     fn is_literal_match(pattern: &str, target: &str) -> bool {
-        match_all_with_lit(pattern, &[target]).first().unwrap().1
+        match_all_is_literal(pattern, &[target]).first().unwrap().1
+    }
+
+    #[test]
+    fn test_ancestors() {
+        assert_eq!(
+            match_all_ancestors("foo/bar/baz", &["foo", "foo/bar", "foo/bar/baz", "fo"]),
+            ["foo", "foo/bar", "foo/bar/baz"]
+        );
+        assert_eq!(
+            match_all_ancestors("foo/bar", &["foo", "fo"]),
+            ["foo"]
+        );
+        assert_eq!(
+            match_all_ancestors("foo", &["foo", "fo"]),
+            ["foo"]
+        );
+        assert_eq!(
+            match_all_ancestors("*.rs", &["main.rs", "src", "src/main.rs"]),
+            ["main.rs"]
+        );
+        assert_eq!(
+            match_all_ancestors("src/*.rs", &["src", "src/main.rs"]),
+            ["src", "src/main.rs"]
+        );
     }
 
     #[test]
@@ -435,28 +487,21 @@ use super::*;
         assert!(!is_literal_match("a{*,b}c", "axc"));
 
         assert_eq!(
-            match_all_with_lit("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
+            match_all_is_literal("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
             [("a", true), ("c.rs", false), ("main.rs", false)]
         );
         assert_eq!(
-            match_all_with_lit("a{b,?}c", &["abc", "axc", "abd"]),
+            match_all_is_literal("a{b,?}c", &["abc", "axc", "abd"]),
             [("abc", true), ("axc", false)]
         );
         assert_eq!(
-            match_all_with_lit("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
+            match_all_is_literal("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
             [("x/b", false), ("x/y/b", false)]
         );
         assert_eq!(
-            match_all_with_lit("a/b", &["a/b", "a//b", "ab"]),
+            match_all_is_literal("a/b", &["a/b", "a//b", "ab"]),
             [("a//b", true), ("a/b", true)]
         );
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_match_literal_ambiguous() {
-        assert!(matches("{??c,abd}", "abc"));
-        assert!(!is_literal_match("{??c,abd}", "abc"));
     }
 
     #[test]

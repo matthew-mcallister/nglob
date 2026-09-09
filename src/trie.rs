@@ -121,6 +121,12 @@ pub struct Trie<T> {
     pub values: FnvHashMap<TrieId, T>,
 }
 
+impl<T> Default for Trie<T> {
+    fn default() -> Self {
+        Self { nodes: Default::default(), values: Default::default() }
+    }
+}
+
 impl<T> Trie<T> {
     pub fn new() -> Self {
         Self {
@@ -168,6 +174,26 @@ impl<T> Trie<T> {
 
     pub fn children(&self, id: TrieId) -> impl Iterator<Item = (Char, TrieId)> + '_ {
         self.nodes[id as usize].children.iter()
+    }
+}
+
+impl<S, T> FromIterator<(S, T)> for Trie<T>
+    where S: AsRef<str>
+{
+    fn from_iter<I: IntoIterator<Item = (S, T)>>(iter: I) -> Self {
+        let mut trie = Trie::new();
+        trie.extend(iter);
+        trie
+    }
+}
+
+impl<S, T> Extend<(S, T)> for Trie<T>
+    where S: AsRef<str>
+{
+    fn extend<I: IntoIterator<Item = (S, T)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k.as_ref(), v);
+        }
     }
 }
 

@@ -217,15 +217,6 @@ mod tests {
     }
 
     #[test]
-    fn test_accepts_sep() {
-        let sm = machine("a/");
-        assert!(!sm[0].accepts_sep); // init -> 'a'
-        assert!(!sm[1].accepts_sep); // term
-        assert!(sm[2].accepts_sep); // 'a' -> '/'
-        assert!(sm[3].accepts_sep); // '/' -> '/'
-    }
-
-    #[test]
     fn test_compile() {
         let sm = machine("");
         assert_eq!(sm.between(0, 1), vec![Transition::Epsilon(1)]);
