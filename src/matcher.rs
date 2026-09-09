@@ -445,6 +445,11 @@ use super::*;
     }
 
     #[test]
+    fn test_match_literal_ambiguous() {
+        assert!(!is_literal_match("{*,abd}", "abc"));
+    }
+
+    #[test]
     fn test_star_choice() {
         assert!(!matches("a{*,/}c", "ab/c"));
     }

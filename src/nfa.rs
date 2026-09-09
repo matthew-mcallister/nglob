@@ -73,6 +73,7 @@ pub type Transition = TransitionRule;
 pub struct State {
     pub transitions: SmallVec<[Transition; 1]>,
     pub is_epsilon_frontier: bool,
+    pub accepts_sep: bool,
 }
 
 impl State {
@@ -120,6 +121,7 @@ impl StateMachine {
     pub fn connect(&mut self, from: StateId, transition: Transition) {
         let state = &mut self.states[from as usize];
         state.is_epsilon_frontier |= !transition.is_epsilon();
+        state.accepts_sep |= matches!(transition, TransitionRule::Sep(_));
         state.transitions.push(transition);
     }
 
@@ -212,6 +214,15 @@ mod tests {
 
     fn machine(s: &str) -> StateMachine {
         from_pattern(&parse_ast(s).unwrap())
+    }
+
+    #[test]
+    fn test_accepts_sep() {
+        let sm = machine("a/");
+        assert!(!sm[0].accepts_sep); // init -> 'a'
+        assert!(!sm[1].accepts_sep); // term
+        assert!(sm[2].accepts_sep); // 'a' -> '/'
+        assert!(sm[3].accepts_sep); // '/' -> '/'
     }
 
     #[test]
