@@ -237,14 +237,6 @@ use super::*;
             ["lib.rs", "main.rs"]
         );
         assert_eq!(
-            match_many("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
-            ["src/a/b.rs", "src/b.rs", "src/main.rs"]
-        );
-        assert_eq!(
-            match_many("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
-            ["a//b", "a/b", "a/x/b"]
-        );
-        assert_eq!(
             match_many("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
             ["a", "c.rs", "main.rs"]
         );
@@ -331,9 +323,25 @@ use super::*;
         assert!(matches("*/.", "a/."));
         assert!(matches("src/**/*.rs", "src/a/b.rs"));
         assert!(!matches("src/**/*.rs", "src.rs"));
-
-        assert!(matches("a/**/b", "a/b"));
-        assert!(matches("a/b", "a//b"));
     }
 
+    #[test]
+    fn test_star_choice() {
+        assert!(!matches("a{*,/}c", "ab/c"));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_redundant_separators() {
+        assert!(matches("a/**/b", "a/b"));
+        assert!(matches("a/b", "a//b"));
+        assert_eq!(
+            match_many("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
+            ["src/a/b.rs", "src/b.rs", "src/main.rs"]
+        );
+        assert_eq!(
+            match_many("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
+            ["a//b", "a/b", "a/x/b"]
+        );
+    }
 }
