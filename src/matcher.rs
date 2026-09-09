@@ -1,6 +1,8 @@
+use std::collections::hash_map::Entry;
 use std::fmt::Write;
+use std::path::is_separator;
 
-use fnv::FnvHashSet;
+use fnv::{FnvBuildHasher, FnvHashMap};
 
 use crate::nfa::{StateId, StateMachine, TransitionRule};
 use crate::test_log;
@@ -24,29 +26,47 @@ impl MatcherState {
     }
 }
 
-#[derive(Debug, Default)]
-struct LiveSet {
-    states: FnvHashSet<MatcherState>,
+// Extra state data we track outside the state graph. All of this machinery can
+// be formalized in terms of pure state graphs, but it is more practical to
+// implement using external tracking.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct StateInfo {
+    // true when the previously matched character was a separator. This allows
+    // additional redundant separators in the pattern to be skipped.
+    have_sep: bool,
 }
 
-impl LiveSet {
-    fn new(capacity: usize) -> Self {
-        let bh = fnv::FnvBuildHasher::new();
+impl StateInfo {
+    fn update(self, c: char) -> Self {
         Self {
-            states: FnvHashSet::with_capacity_and_hasher(capacity, bh),
+            have_sep: is_separator(c),
         }
     }
+}
 
-    fn clear(&mut self) {
-        self.states.clear();
-    }
+type StateSet = FnvHashMap<MatcherState, StateInfo>;
 
-    fn is_live(&self, state: &MatcherState) -> bool {
-        self.states.contains(&state)
-    }
-
-    fn mark_live(&mut self, state: MatcherState) {
-        self.states.insert(state);
+// Merges state data when two automata arrive at the same state
+fn merge_state(
+    states: &mut StateSet,
+    state: MatcherState,
+    info: StateInfo,
+) -> Option<StateInfo> {
+    match states.entry(state) {
+        Entry::Occupied(mut entry) => {
+            let merged = StateInfo {
+                have_sep: entry.get().have_sep || info.have_sep,
+            };
+            if merged == *entry.get() {
+                return None;
+            }
+            entry.insert(merged);
+            Some(merged)
+        }
+        Entry::Vacant(entry) => {
+            entry.insert(info);
+            Some(info)
+        }
     }
 }
 
@@ -54,20 +74,27 @@ impl LiveSet {
 struct Matcher<'m, 't, T> {
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
-    states: Vec<MatcherState>,
-    new_states: Vec<MatcherState>, // Reuse memory
-    live: LiveSet,
+    states: StateSet,
+    new_states: StateSet, // Reuse memory
+    queue: Vec<(MatcherState, StateInfo)>, // Reuse memory
     accepted: Vec<TrieId>,
 }
 
 impl<'m, 't, T> Matcher<'m, 't, T> {
     fn new(machine: &'m StateMachine, trie: &'t Trie<T>) -> Self {
+        let mut states =
+            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
+        let initial = MatcherState { nfa: machine.initial(), trie: trie.root() };
+        states.insert(initial, StateInfo::default());
         Self {
             machine,
             trie,
-            states: vec![MatcherState { nfa: 0, trie: 0 }],
-            new_states: Vec::new(),
-            live: LiveSet::new(machine.states.len()),
+            states,
+            new_states: StateSet::with_capacity_and_hasher(
+                machine.states.len(),
+                FnvBuildHasher::new(),
+            ),
+            queue: Vec::new(),
             accepted: Vec::new(),
         }
     }
@@ -75,30 +102,38 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     // Follows epsilon transitions in the NFA until all states are on the
     // frontier.
     fn expand_epsilon(&mut self) {
-        self.live.clear();
-        let live = &mut self.live;
-        let machine= self.machine;
+        let machine = self.machine;
+        let states = &mut self.states;
+        let queue = &mut self.queue;
+        queue.extend(states.drain());
 
-        let mut push_state = |queue: &mut Vec<MatcherState>, s: MatcherState| {
-            if !live.is_live(&s) {
-                live.mark_live(s);
-                queue.push(s);
+        let mut push_state = |queue: &mut Vec<(MatcherState, StateInfo)>,
+                              s: MatcherState,
+                              info: StateInfo| {
+            if let Some(merged) = merge_state(states, s, info) {
+                queue.push((s, merged));
             }
         };
 
-        let queue = &mut self.new_states;
-        self.states.iter().for_each(|&s| push_state(queue, s));
-        self.states.clear();
-        while let Some(s) = queue.pop() {
+        while let Some((s, info)) = queue.pop() {
             if machine[s.nfa].is_epsilon_frontier {
-                self.states.push(s);
+                push_state(queue, s, info);
             }
             for t in machine.transitions(s.nfa) {
-                if let TransitionRule::Epsilon(next) | TransitionRule::WildEpsilon(next) = t {
-                    push_state(queue, s.with_nfa(*next));
+                match t {
+                    TransitionRule::Epsilon(next) | TransitionRule::WildEpsilon(next) => {
+                        push_state(queue, s.with_nfa(*next), info);
+                    }
+                    // Separator in target can skip multiple separators in pattern
+                    TransitionRule::Sep(next) if info.have_sep => {
+                        push_state(queue, s.with_nfa(*next), info);
+                    }
+                    _ => {}
                 }
             }
         }
+        // Only frontier states can consume input; the rest are dead ends
+        self.states.retain(|&s, _| machine[s.nfa].is_epsilon_frontier);
 
         self.record_accepted();
     }
@@ -109,7 +144,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     // These states are still live but the terminal state has no transitions so
     // they will be cleared out right away.
     fn record_accepted(&mut self) {
-        for state in self.states.iter() {
+        for &state in self.states.keys() {
             if self.trie.get_value(state.trie).is_some()
                 && state.nfa == self.machine.terminal()
             {
@@ -120,17 +155,17 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
 
     // Follows all possible transitions which consume a character in the trie.
     fn expand_matching(&mut self) {
-        self.live.clear();
-        for s in &self.states {
+        let new_states = &mut self.new_states;
+        for (&s, info) in self.states.iter() {
             for (c, next_trie) in self.trie.children(s.trie) {
+                let next_info = info.update(c);
                 for t in self.machine.transitions(s.nfa) {
                     let next = MatcherState { nfa: t.next(), trie: next_trie };
-                    if t.is_epsilon() || self.live.is_live(&next) {
+                    if t.is_epsilon() {
                         test_log!("{c},{next},{t:?}... skipped");
                     } else if t.matches(c) {
                         test_log!("{c},{next},{t:?}... matched");
-                        self.new_states.push(next);
-                        self.live.mark_live(next);
+                        merge_state(new_states, next, next_info);
                     } else {
                         test_log!("{c},{next},{t:?}... failed");
                     }
@@ -145,17 +180,18 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     fn show_states(&self) -> String {
         let mut out = String::new();
         let _ = write!(out, "[");
-        for (i, &s) in self.states.iter().enumerate() {
+        for (i, (&s, &info)) in self.states.iter().enumerate() {
             if i > 0 {
                 let _ = write!(out, ", ");
             }
             let _ = write!(
                 out,
-                r#"({} "{}", {} "{}")"#,
+                r#"({} "{}", {} "{}"{})"#,
                 s.trie,
                 self.trie.nodes[s.trie as usize].show_accepts(),
                 s.nfa,
                 self.machine[s.nfa].show_accepts(),
+                if info.have_sep { " sep" } else { "" },
             );
         }
         let _ = write!(out, "]");
@@ -176,8 +212,6 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         while !self.states.is_empty() {
             self.step();
         }
-        self.live.clear();
-        self.expand_epsilon();
     }
 
     fn accepted<'a>(&'a self) -> impl Iterator<Item = &'t T> + 'a {
@@ -333,11 +367,15 @@ use super::*;
     #[test]
     fn test_multiple_separators_in_target() {
         assert!(matches("a/b", "a//b"));
+        assert!(matches("a/b", "a///b"));
+        assert!(!matches("a/b", "a/b/c"));
     }
 
     #[test]
-    #[ignore]
     fn test_multiple_separators_in_pattern() {
+        assert!(matches("a//b", "a/b"));
+        assert!(matches("a///b", "a/b"));
+        assert!(!matches("a//b", "ab"));
         assert!(matches("a/**/b", "a/b"));
         assert!(matches("a{*/,}/b", "asdf/b"));
         assert_eq!(
