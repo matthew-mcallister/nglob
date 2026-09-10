@@ -9,9 +9,9 @@ use crate::test_log;
 use crate::trie::{Trie, TrieId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct MatcherState {
-    nfa: StateId,
-    trie: TrieId,
+pub struct MatcherState {
+    pub nfa: StateId,
+    pub trie: TrieId,
 }
 
 impl std::fmt::Display for MatcherState {
@@ -30,13 +30,13 @@ impl MatcherState {
 // be formalized in terms of pure state graphs, but it is more practical to
 // implement using external tracking.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct StateInfo {
+pub struct StateInfo {
     // true when the previously matched character was a separator. This allows
     // additional redundant separators in the pattern to be skipped.
     // TODO: Move this to the trie?
-    have_sep: bool,
+    pub have_sep: bool,
     // true when only literals were matched and never ?/*/**
-    is_literal: bool,
+    pub is_literal: bool,
 }
 
 impl Default for StateInfo {
@@ -99,7 +99,7 @@ pub struct MatchConfig {
 }
 
 #[derive(Debug)]
-struct Matcher<'m, 't, T> {
+pub struct StringMatcher<'m, 't, T> {
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
     config: MatchConfig,
@@ -109,12 +109,13 @@ struct Matcher<'m, 't, T> {
     accepted: Vec<Accepted>,
 }
 
-impl<'m, 't, T> Matcher<'m, 't, T> {
-    fn new(machine: &'m StateMachine, trie: &'t Trie<T>, config: MatchConfig) -> Self {
-        let mut states =
-            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
-        let initial = MatcherState { nfa: machine.initial(), trie: trie.root() };
-        states.insert(initial, StateInfo::default());
+impl<'m, 't, T> StringMatcher<'m, 't, T> {
+    fn new_inner(
+        config: MatchConfig,
+        machine: &'m StateMachine,
+        trie: &'t Trie<T>,
+        states: StateSet,
+    ) -> Self {
         Self {
             machine,
             trie,
@@ -127,6 +128,40 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             queue: Vec::new(),
             accepted: Vec::new(),
         }
+    }
+
+    pub fn new(
+        config: MatchConfig,
+        machine: &'m StateMachine,
+        trie: &'t Trie<T>,
+    ) -> Self {
+        let mut states =
+            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
+        let initial = MatcherState { nfa: machine.initial(), trie: trie.root() };
+        states.insert(initial, StateInfo::default());
+        Self::new_inner(config, machine, trie, states)
+    }
+
+    // Construct a matcher with states carried over from the parent directory.
+    pub(crate) fn with_prior_states(
+        config: MatchConfig,
+        machine: &'m StateMachine,
+        trie: &'t Trie<T>,
+        prior_states: &[StateId],
+    ) -> Self {
+        let mut states =
+            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
+        for &nfa in prior_states {
+            let state = MatcherState { nfa, trie: trie.root() };
+            states.insert(state, StateInfo {
+                // Treat last char as / or \. All Sep transitions will be
+                // skipped by expand_epsilon(). Basically the same effect as if
+                // the first character in the trie were /.
+                have_sep: true,
+                ..Default::default()
+            });
+        }
+        Self::new_inner(config, machine, trie, states)
     }
 
     // Follows epsilon transitions in the NFA until all states are on the
@@ -241,7 +276,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     }
 
     // Runs until full trie has been consumed, or no more live states remain.
-    fn run(&mut self) {
+    pub fn run(&mut self) {
         test_log!("{:?}", self.trie.nodes);
         test_log!("{:?}", self.machine.states);
         while !self.states.is_empty() {
@@ -249,7 +284,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         }
     }
 
-    fn accepted<'a>(&'a self) -> impl Iterator<Item = Accepted> + 'a {
+    pub fn accepted<'a>(&'a self) -> impl Iterator<Item = Accepted> + 'a {
         self.accepted.iter().copied()
     }
 }
@@ -257,7 +292,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
 fn match_string(machine: &StateMachine, target: &str) -> bool {
     let mut trie = Trie::new();
     trie.insert(target, ());
-    let mut matcher = Matcher::new(machine, &trie, MatchConfig::default());
+    let mut matcher = StringMatcher::new(MatchConfig::default(), machine, &trie);
     matcher.run();
     !matcher.accepted.is_empty()
 }
@@ -267,11 +302,48 @@ fn match_trie<'m, 't, T>(
     trie: &'t Trie<T>,
     config: MatchConfig,
 ) -> Vec<(&'t T, bool)> {
-    let mut matcher = Matcher::new(machine, trie, config);
+    let mut matcher = StringMatcher::new(config, machine, trie);
     matcher.run();
     matcher
         .accepted()
         .map(|a| (trie.get_value(a.state.trie).unwrap(), a.info.is_literal))
+        .collect()
+}
+
+#[derive(Debug)]
+pub struct Match<T> {
+    pub state: StateId,
+    pub value: T,
+    /// Walker should not descend into . or .. unless the match is literal.
+    pub is_literal: bool,
+}
+
+/// Returns matching entries from the current directory given a set of states
+/// from the parent dir that matched the current dir.
+pub fn find_matching_entries<'a, T: Copy>(
+    machine: &StateMachine,
+    prior_states: &[StateId],
+    entries: impl IntoIterator<Item = (&'a str, T)>,
+) -> Vec<Match<T>> {
+    let trie: Trie<T> = entries.into_iter().collect();
+
+    let config = MatchConfig {
+        accept_ancestors: true,
+    };
+
+    let mut matcher = StringMatcher::with_prior_states(config, machine, &trie, prior_states);
+    matcher.run();
+
+    matcher.accepted()
+        .map::<Match<T>, _>(|accepted| {
+            let state = accepted.state;
+            let &value = trie.get_value(state.trie).unwrap();
+            Match {
+                state: state.nfa,
+                value,
+                is_literal: accepted.info.is_literal,
+            }
+        })
         .collect()
 }
 
@@ -531,5 +603,30 @@ mod tests {
             match_all("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
             ["a//b", "a/b", "a/x/b"]
         );
+    }
+
+    #[test]
+    fn test_trivial_walk() {
+        fn find_entries<'a>(m: &StateMachine, s: &[StateId], e: &[&'a str]) -> (Vec<StateId>, Vec<&'a str>) {
+            let entries = e.iter().map(|&e| (e, e) );
+            let matched = find_matching_entries(&m, &s, entries);
+            let states = matched.iter().map(|m| m.state).collect();
+            let matches = matched.iter().map(|m| m.value).collect::<Vec<_>>();
+            (states, matches)
+        }
+
+        let m = machine("project/src/*.c");
+
+        let root: &[&str] = &["project", "README.md"];
+        let project: &[&str] = &["src", "tests", "CMakeLists.txt"];
+        let src: &[&str] = &["a.c", "a.h", "b.c", "subdir"];
+
+        let (states, matches) = find_entries(&m, &[m.initial()], root);
+        assert_eq!(matches, ["project"]);
+        let (states, matches) = find_entries(&m, &states, project);
+        assert_eq!(matches, ["src"]);
+        let (_, mut matches) = find_entries(&m, &states, src);
+        matches.sort_unstable();
+        assert_eq!(matches, ["a.c", "b.c"]);
     }
 }

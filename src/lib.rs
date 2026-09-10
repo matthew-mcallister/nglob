@@ -1,5 +1,5 @@
-mod pattern;
 mod nfa;
+mod pattern;
 mod matcher;
 mod trie;
 
