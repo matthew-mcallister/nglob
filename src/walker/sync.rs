@@ -1,52 +1,65 @@
 use std::io::Result;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::matcher::find_matching_entries;
-use crate::nfa::{StateId, StateMachine};
+use crate::matcher::{MatcherState, advance_sep, find_matching_entries, partition_states};
+use crate::nfa::{StateId, StateMachine, from_pattern};
 use crate::pattern::Pattern;
 use crate::trie::Trie;
-use crate::walker::{Entry, FileType};
-
-#[derive(Debug)]
-struct Walker {
-    cur_dir: PathBuf,
-    pattern: Pattern,
-    machine: StateMachine,
-}
+use crate::walker::{Entry, FileType, GlobConfig};
 
 fn from_dir_entry(entry: std::fs::DirEntry) -> Result<Entry> {
-    let path = entry.path().into_os_string().into_string()
-        .map_err(|_| {
+    let path = entry.path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .ok_or_else(|| {
             let kind = std::io::ErrorKind::InvalidData;
             let message = format!("filename contains invalid UTF-8: {}", entry.path().to_string_lossy());
             std::io::Error::new(kind, message)
-        })?;
-    Ok(Entry {
-        path,
-        file_type: entry.file_type()?.into(),
-    })
+        })?
+        .to_owned();
+    let file_type = entry.file_type()?.into();
+    Ok(Entry { path, file_type })
 }
 
 fn walk_dir(
+    config: &GlobConfig,
     machine: &StateMachine,
-    dir: &Path,
+    cur_dir: &Path,
     prior_states: &[StateId],
-    out: &mut Vec<Result<Entry>>,
-) -> Result<()> {
-    let dir_entries = std::fs::read_dir(dir)?;
+    recursion_depth: usize,
+    out: &mut Vec<std::io::Result<Entry>>,
+) {
+    if recursion_depth > config.max_depth {
+        out.push(Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "max recursion depth exceeded",
+        )));
+        return;
+    }
+
+    let full_path = |filename: &str| cur_dir.join(filename).into_string().unwrap();
+
+    const LITERALS: &[&str] = &["", ".", ".."];
+
+    let dir_entries = match std::fs::read_dir(cur_dir) {
+        Ok(d) => d,
+        Err(e) => {
+            out.push(Err(e));
+            return;
+        }
+    };
+    // TODO: Follow symlinks
 
     let mut entries: Vec<Entry> = Vec::with_capacity(32);
-    for d in &["", ".", ".."] {
+    for d in LITERALS {
         // Literal-only matches
-        entries.push(Entry {
-            path: dir.join(d).into_string().unwrap(),
-            file_type: FileType::Directory,
-        });
+        entries.push(Entry { path: d.to_string(), file_type: FileType::Directory });
     }
     for e in dir_entries {
         match e.and_then(from_dir_entry) {
             Ok(e) => entries.push(e),
-            Err(err) => out.push(Err(err)),
+            Err(e) => out.push(Err(e)),
         }
     }
 
@@ -55,25 +68,114 @@ fn walk_dir(
         .map(|(i, e)| (&e.path, i))
         .collect();
 
-    let matches = find_matching_entries(
+    let get_entry = |state: MatcherState| {
+        let idx = *trie.get_value(state.trie).unwrap();
+        (idx, &entries[idx])
+    };
+
+    // First find all entries that match a path component in the pattern. File
+    // type and filters not taken into account.
+    let mut accepted = find_matching_entries(
         machine,
         &trie,
         prior_states,
     );
+    accepted.retain(|out| {
+        // Immediately check if "", ".", ".." were literal matches
+        if out.info.is_literal {
+            return true;
+        }
+        let (_, entry) = get_entry(out.state);
+        !LITERALS.contains(&entry.path.as_str())
+    });
 
-    // We want to prune subdirectories before descending. We already know that
-    // some directories are full matches and not partial matches because they
-    // matched the terminal state.
-    //
-    // However, some patterns end in a trailing `/`, and we want to treat those
-    // as full matches without descending. We also want to avoid matching a
-    // pattern that ends in `/*` as it may be unintended for `src/*` to match
-    // `src/`, yet `/{,*}` *should* be matched because it is explicit/literal
-    // in matching a trailing `/`.
-    //
-    // This is solved by running a pruning step on directories which follows
-    // all Sep transitions and literal epsilons. States that reach terminal are
-    // full matches and get pruned; all remaining states trigger recursion.
+    let (mut full, mut partial) = partition_states(machine, accepted);
+    partial.retain(|out| {
+        let (_, entry) = get_entry(out.state);
+        entry.file_type == FileType::Directory
+    });
 
-    todo!()
+    // Now we feed a logical '/'. This treats patterns that end in a trailing
+    // '/' as a match and may save us from descending into those
+    // subdirectories. Patterns ending in `/*` or `/**` are *not* count as a
+    // full match, since user intent is ambiguous in those cases.
+    let prior = partial.iter().map(|out| out.state);
+    let states = advance_sep(machine, &trie, prior);
+    let (full2, partial) = partition_states(machine, states);
+    full.extend(full2);
+
+    // `partial` now contains all matches that trigger recursion, and `full`
+    // contains all full matches that we may yield.
+
+    // Filter, sort + dedupe, add full path, and yield matches
+    let mut full: Vec<usize> = full.into_iter()
+        .filter_map(|out| {
+            let (idx, entry) = get_entry(out.state);
+            config.should_match(entry.file_type).then_some(idx)
+        })
+        .collect();
+    full.sort();
+    full.dedup();
+    for idx in full {
+        out.push(Ok(Entry {
+            path: full_path(&entries[idx].path),
+            file_type: entries[idx].file_type,
+        }));
+    }
+
+    // Group partial matches by directory and trigger recursion
+    let mut kernels: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
+    for out in partial {
+        let (idx, _) = get_entry(out.state);
+        kernels[idx].push(out.state.nfa);
+    }
+
+    for (i, states) in kernels.into_iter().enumerate() {
+        let dir = full_path(&entries[i].path);
+        walk_dir(
+            config,
+            machine,
+            Path::new(&dir),
+            &states,
+            recursion_depth + 1,
+            out,
+        );
+    }
+}
+
+#[derive(Debug)]
+pub struct GlobResult {
+    results: Vec<std::io::Result<Entry>>,
+    _private: (),
+}
+
+impl GlobResult {
+    pub fn results(&self) -> &[std::io::Result<Entry>] {
+        &self.results
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = &Entry> + '_ {
+        self.results.iter().filter_map(|r| r.as_ref().ok())
+    }
+
+    pub fn errors(&self) -> impl Iterator<Item = &std::io::Error> + '_ {
+        self.results.iter().filter_map(|r| r.as_ref().err())
+    }
+}
+
+pub fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
+    let machine = from_pattern(&pattern.root);
+    let mut results = Vec::new();
+    walk_dir(
+        config,
+        &machine,
+        Path::new(&pattern.base),
+        &[machine.initial()],
+        0,
+        &mut results,
+    );
+    GlobResult {
+        results,
+        _private: (),
+    }
 }

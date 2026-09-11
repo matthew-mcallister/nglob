@@ -21,7 +21,7 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-pub fn is_escape_char(c: char) -> bool {
+pub(crate) fn is_escape_char(c: char) -> bool {
     matches!(c, '\\' | '?' | '*' | '{' | '}' | ',')
 }
 
@@ -105,7 +105,7 @@ impl<'a> Tokens<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Ast {
+pub(crate) enum Ast {
     Empty,
     Char(char),
     Sep,
@@ -134,11 +134,11 @@ pub enum Ast {
 ///
 /// On Windows, both `/` and `\\` will be accepted as separators
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Pattern {
+pub(crate) struct Pattern {
     /// Base directory for search
-    pub base: String,
+    pub(crate) base: String,
     /// Root of AST
-    pub root: Ast,
+    pub(crate) root: Ast,
 }
 
 #[cfg(windows)]
@@ -236,11 +236,11 @@ fn parse_alternative(tokens: &mut Tokens) -> Result<Ast, ParseError> {
     Ok(Ast::Alternative(branches))
 }
 
-pub fn parse_ast(input: &str) -> Result<Ast, ParseError> {
+pub(crate) fn parse_ast(input: &str) -> Result<Ast, ParseError> {
     parse_sequence(&mut Tokens { input }, |_| false)
 }
 
-pub fn parse(input: &str) -> Result<Pattern, ParseError> {
+pub(crate) fn parse(input: &str) -> Result<Pattern, ParseError> {
     let mut input = Tokens { input };
     let base = parse_base(&mut input)?;
     let root = parse_sequence(&mut input, |_| false)?;

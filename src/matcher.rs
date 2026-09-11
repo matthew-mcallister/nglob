@@ -81,13 +81,13 @@ fn merge_state(states: &mut StateSet, state: MatcherState, info: StateInfo) -> O
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Accepted {
+pub struct Output {
     pub state: MatcherState,
     pub info: StateInfo,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct MatchConfig {
+pub struct MatcherConfig {
     /// Causes the matcher to accept ancestors of a matching path. For example,
     /// if `accept_ancestors` is true, then `foo/bar/baz` will match `foo`,
     /// `foo/bar`, and `foo/bar/baz`.
@@ -98,16 +98,16 @@ pub struct MatchConfig {
 pub struct Matcher<'m, 't, T> {
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
-    config: MatchConfig,
+    config: MatcherConfig,
     states: StateSet,
     old_states: StateSet, // Reuse memory
     queue: Vec<(MatcherState, StateInfo)>, // Reuse memory
-    accepted: Vec<Accepted>,
+    accepted: Vec<Output>,
 }
 
 impl<'m, 't, T> Matcher<'m, 't, T> {
     fn new_inner(
-        config: MatchConfig,
+        config: MatcherConfig,
         machine: &'m StateMachine,
         trie: &'t Trie<T>,
         states: StateSet,
@@ -127,7 +127,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     }
 
     pub fn new(
-        config: MatchConfig,
+        config: MatcherConfig,
         machine: &'m StateMachine,
         trie: &'t Trie<T>,
     ) -> Self {
@@ -140,7 +140,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
 
     // Construct a matcher with states carried over from the parent directory.
     pub(crate) fn with_prior_states(
-        config: MatchConfig,
+        config: MatcherConfig,
         machine: &'m StateMachine,
         trie: &'t Trie<T>,
         prior_states: impl IntoIterator<Item = MatcherState>,
@@ -210,7 +210,6 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             |trans, _| matches!(trans.rule, TransitionRule::Epsilon | TransitionRule::Sep),
             |state| state.is_sep_frontier,
         );
-        self.record_accepted();
     }
 
     // Records states which are at the terminal NFA node (full pattern match)
@@ -226,7 +225,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             if self.trie.get_value(state.trie).is_some()
                 && (state.nfa == terminal || accept_ancestor)
             {
-                self.accepted.push(Accepted { state, info });
+                self.accepted.push(Output { state, info });
             }
         }
     }
@@ -291,7 +290,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         }
     }
 
-    pub fn accepted<'a>(&'a self) -> impl Iterator<Item = Accepted> + 'a {
+    pub fn accepted<'a>(&'a self) -> impl Iterator<Item = Output> + 'a {
         self.accepted.iter().copied()
     }
 }
@@ -299,7 +298,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
 fn match_string(machine: &StateMachine, target: &str) -> bool {
     let mut trie = Trie::new();
     trie.insert(target, ());
-    let mut matcher = Matcher::new(MatchConfig::default(), machine, &trie);
+    let mut matcher = Matcher::new(MatcherConfig::default(), machine, &trie);
     matcher.run();
     !matcher.accepted.is_empty()
 }
@@ -307,7 +306,7 @@ fn match_string(machine: &StateMachine, target: &str) -> bool {
 fn match_trie<'m, 't, T>(
     machine: &'m StateMachine,
     trie: &'t Trie<T>,
-    config: MatchConfig,
+    config: MatcherConfig,
 ) -> Vec<(&'t T, bool)> {
     let mut matcher = Matcher::new(config, machine, trie);
     matcher.run();
@@ -323,8 +322,8 @@ pub fn find_matching_entries<'a, T: Copy>(
     machine: &StateMachine,
     trie: &Trie<T>,
     prior_states: &[StateId],
-) -> Vec<Accepted> {
-    let config = MatchConfig {
+) -> Vec<Output> {
+    let config = MatcherConfig {
         accept_ancestors: true,
     };
     let prior_states = prior_states.iter().map(|&s| MatcherState { nfa: s, trie: trie.root() });
@@ -333,22 +332,28 @@ pub fn find_matching_entries<'a, T: Copy>(
     matcher.accepted
 }
 
-// Prunes states that terminate after accepting a separator. Returns a pair
-// `(terminal, non_terminal)` of states which did and did not fully match.
-pub fn prune_trailing_sep<'a, T: Copy>(
+// Logically advances all states past any separator in the pattern. The
+// resulting states are all either terminal (full matches) or trigger
+// recursion into the matched subdirectory.
+pub fn advance_sep<'a, T: Copy>(
     machine: &StateMachine,
     trie: &Trie<T>,
-    prior_states: &[MatcherState],
-) -> (Vec<Accepted>, Vec<Accepted>) {
-    let config = MatchConfig {
+    prior_states: impl IntoIterator<Item = MatcherState>,
+) -> Vec<Output> {
+    let config = MatcherConfig {
         accept_ancestors: false,
     };
-    let mut matcher = Matcher::with_prior_states(config, machine, &trie, prior_states.iter().cloned());
+    let mut matcher = Matcher::with_prior_states(config, machine, &trie, prior_states);
     matcher.expand_sep();
-    let mut active = matcher.states;
-    active.retain(|id, _| id.nfa != machine.terminal());
-    let active = active.into_iter().map(|(s, i)| Accepted { state: s, info: i }).collect();
-    (active, matcher.accepted)
+    matcher.states.into_iter()
+        .map(|(state, info)| Output { state, info })
+        .collect()
+}
+
+/// Partitions output states into a pair of sets
+/// `(full_matches, partial_matches)`.
+pub fn partition_states(machine: &StateMachine, accepted: Vec<Output>) -> (Vec<Output>, Vec<Output>) {
+    accepted.into_iter().partition(|a| a.state.nfa == machine.terminal())
 }
 
 #[cfg(test)]
@@ -383,7 +388,7 @@ mod tests {
         pattern: &str,
         targets: &[&'t str],
     ) -> Vec<&'t str> {
-        let config = MatchConfig { accept_ancestors: true, ..Default::default() };
+        let config = MatcherConfig { accept_ancestors: true, ..Default::default() };
         let trie: Trie<&'t str> = targets.iter().map(|&k| (k, k)).collect();
         let mut matches: Vec<_> = match_trie(&machine(pattern), &trie, config)
             .into_iter()
