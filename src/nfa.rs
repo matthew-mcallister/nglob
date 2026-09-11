@@ -67,12 +67,19 @@ impl TransitionRule {
     }
 }
 
+// TODO: Make this a struct
 pub type Transition = TransitionRule;
 
 #[derive(Debug, Default)]
 pub struct State {
     pub transitions: SmallVec<[Transition; 1]>,
+    // XXX: bitflags
+    /// State has non-epsilon transitions
     pub is_epsilon_frontier: bool,
+    /// State has transitions other than Sep and Epsilon (WildEpsilon counts
+    /// as different from Epsilon)
+    pub is_sep_frontier: bool,
+    /// Has a Sep transition
     pub accepts_sep: bool,
 }
 
@@ -95,6 +102,7 @@ impl State {
     }
 }
 
+// TODO: Rename to CompiledPattern or something
 #[derive(Debug)]
 pub struct StateMachine {
     pub states: Vec<State>,
@@ -106,7 +114,10 @@ impl StateMachine {
             State::default(), // Initial
             State::default(), // Terminal
         ];
+        // Treating the terminal state as a frontier state very slightly
+        // simplifies some logic
         states[1].is_epsilon_frontier = true;
+        states[1].is_sep_frontier = true;
         Self {
             states,
         }
@@ -121,6 +132,7 @@ impl StateMachine {
     pub fn connect(&mut self, from: StateId, transition: Transition) {
         let state = &mut self.states[from as usize];
         state.is_epsilon_frontier |= !transition.is_epsilon();
+        state.is_sep_frontier |= !matches!(transition, TransitionRule::Epsilon(_) | TransitionRule::Sep(_));
         state.accepts_sep |= matches!(transition, TransitionRule::Sep(_));
         state.transitions.push(transition);
     }
@@ -160,25 +172,22 @@ pub fn compile(sm: &mut StateMachine, ast: &Ast, initial: StateId, terminal: Sta
     match ast {
         Ast::Empty => sm.connect(initial, Transition::Epsilon(terminal)),
         Ast::Char(c) => sm.connect(initial, Transition::Char(*c, terminal)),
+        Ast::Wildcard => sm.connect(initial, Transition::Wildcard(terminal)),
         Ast::Sep => {
             let loop_state = sm.new_state();
             sm.connect(initial, Transition::Sep(loop_state));
             sm.connect(loop_state, Transition::Sep(loop_state));
             sm.connect(loop_state, Transition::Epsilon(terminal));
         }
-        Ast::Wildcard => sm.connect(initial, Transition::Wildcard(terminal)),
         Ast::Star | Ast::StarStar => {
-            let entry = sm.new_state();
-            let exit = sm.new_state();
-            sm.connect(initial, Transition::WildEpsilon(terminal));
-            sm.connect(initial, Transition::Epsilon(entry));
+            let loop_state = sm.new_state();
+            sm.connect(initial, Transition::Epsilon(loop_state));
+            sm.connect(loop_state, Transition::WildEpsilon(terminal));
             match ast {
-                Ast::Star => sm.connect(entry, Transition::Wildcard(exit)),
-                Ast::StarStar => sm.connect(entry, Transition::Any(exit)),
+                Ast::Star => sm.connect(loop_state, Transition::Wildcard(loop_state)),
+                Ast::StarStar => sm.connect(loop_state, Transition::Any(loop_state)),
                 _ => unreachable!(),
             }
-            sm.connect(exit, Transition::WildEpsilon(entry));
-            sm.connect(exit, Transition::Epsilon(terminal));
         }
         Ast::Sequence(nodes) => {
             let mut initial = initial;
@@ -233,18 +242,14 @@ mod tests {
         assert_eq!(sm.between(0, 1), vec![Transition::Wildcard(1)]);
 
         let sm = machine("*");
-        assert_eq!(sm.between(0, 1), vec![Transition::WildEpsilon(1)]);
         assert_eq!(sm.between(0, 2), vec![Transition::Epsilon(2)]);
-        assert_eq!(sm.between(2, 3), vec![Transition::Wildcard(3)]);
-        assert_eq!(sm.between(3, 2), vec![Transition::WildEpsilon(2)]);
-        assert_eq!(sm.between(3, 1), vec![Transition::Epsilon(1)]);
+        assert_eq!(sm.between(2, 2), vec![Transition::Wildcard(2)]);
+        assert_eq!(sm.between(2, 1), vec![Transition::WildEpsilon(1)]);
 
         let sm = machine("**");
-        assert_eq!(sm.between(0, 1), vec![Transition::WildEpsilon(1)]);
         assert_eq!(sm.between(0, 2), vec![Transition::Epsilon(2)]);
-        assert_eq!(sm.between(2, 3), vec![Transition::Any(3)]);
-        assert_eq!(sm.between(3, 2), vec![Transition::WildEpsilon(2)]);
-        assert_eq!(sm.between(3, 1), vec![Transition::Epsilon(1)]);
+        assert_eq!(sm.between(2, 2), vec![Transition::Any(2)]);
+        assert_eq!(sm.between(2, 1), vec![Transition::WildEpsilon(1)]);
 
         let sm = machine("abc");
         assert_eq!(sm.between(0, 2), vec![Transition::Char('a', 2)]);

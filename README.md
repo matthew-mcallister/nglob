@@ -1,7 +1,12 @@
 # nglob
 
-nglob is an implementation of glob file search as a Rust library. It supports
-multiple async runtimes, a variety of search options, and both Windows and
-Unix-like filesystems. It uses a search algorithm based on nondeterministic
-finite automata, which simultaneously handles complex search patterns and
-filesystem-specific quirks while minimizing the number of directories visited.
+nglob is a rust library for file globbing. It supports multiple async runtimes,
+multiple search options, and both Windows and Unix-like filesystems. It sports
+a search algorithm based on finite automata which results in simple semantics
+while handling complex patterns.
+
+## Limitations
+
+- nglob currently only works on UTF-8 filesystems.
+- nglob does not do cycle detection, although it will stop searching past a
+  maximum recursion depth.
