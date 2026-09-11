@@ -49,7 +49,7 @@ impl Default for StateInfo {
 }
 
 impl StateInfo {
-    fn update(self, c: Option<char>, transition: &TransitionRule) -> Self {
+    fn update(self, c: Option<char>, transition: &Transition) -> Self {
         Self {
             have_sep: c.map(is_separator).unwrap_or(self.have_sep),
             is_literal: self.is_literal && transition.is_literal(),
@@ -184,7 +184,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
             }
             for t in machine.transitions(s.nfa) {
                 if follow(t, &info) {
-                    self.enqueue(s.with_nfa(t.next()), info.update(None, t));
+                    self.enqueue(s.with_nfa(t.next), info.update(None, t));
                 }
             }
         }
@@ -196,8 +196,8 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     fn expand_epsilon(&mut self) {
         self.expand(
             |trans, info|
-                matches!(trans, TransitionRule::Epsilon(_) | TransitionRule::WildEpsilon(_))
-                || matches!(trans, TransitionRule::Sep(_) if info.have_sep),
+                matches!(trans.rule, TransitionRule::Epsilon | TransitionRule::WildEpsilon)
+                || matches!(trans.rule, TransitionRule::Sep if info.have_sep),
             |state| state.is_epsilon_frontier,
         );
         self.record_accepted();
@@ -207,7 +207,7 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     // frontier.
     pub fn expand_sep(&mut self) {
         self.expand(
-            |trans, _| matches!(trans, TransitionRule::Epsilon(_) | TransitionRule::Sep(_)),
+            |trans, _| matches!(trans.rule, TransitionRule::Epsilon | TransitionRule::Sep),
             |state| state.is_sep_frontier,
         );
         self.record_accepted();
@@ -237,8 +237,8 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
         for (&s, info) in self.old_states.iter() {
             for (c, next_trie) in self.trie.children(s.trie) {
                 for t in self.machine.transitions(s.nfa) {
-                    let next = MatcherState { nfa: t.next(), trie: next_trie };
-                    if t.is_epsilon() {
+                    let next = MatcherState { nfa: t.next, trie: next_trie };
+                    if t.is_any_epsilon() {
                         test_log!("{c},{next},{t:?}... skipped");
                     } else if t.matches(c) {
                         test_log!("{c},{next},{t:?}... matched");
