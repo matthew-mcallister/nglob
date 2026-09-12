@@ -1,277 +1,392 @@
 use std::collections::hash_map::Entry;
 use std::fmt::Write;
-use std::path::is_separator;
 
 use fnv::{FnvBuildHasher, FnvHashMap};
 
 use crate::nfa::{State, StateId, StateMachine, Transition, TransitionRule};
 use crate::test_log;
-use crate::trie::{Trie, TrieId};
+use crate::trie::{Trie, TrieId, TrieNode};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct MatcherState {
-    pub nfa: StateId,
-    pub trie: TrieId,
-}
-
-impl std::fmt::Display for MatcherState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "t{},s{}", self.trie, self.nfa)
-    }
-}
-
-impl MatcherState {
-    fn with_nfa(self, nfa: StateId) -> Self {
-        Self { nfa, ..self }
-    }
-}
-
-// Extra state data we track outside the state graph. All of this machinery can
-// be formalized in terms of pure state graphs, but it is more practical to
-// implement using external tracking.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StateInfo {
-    // true when the previously matched character was a separator. This allows
-    // additional redundant separators in the pattern to be skipped.
-    // TODO: Move this to the trie?
-    pub have_sep: bool,
-    // true when only literals were matched and never ?/*/**
-    pub is_literal: bool,
+pub struct TrieEntry {
+    pub index: usize,
+    pub is_dir: bool,
 }
 
-impl Default for StateInfo {
+/// We store live states as StateKey + StateFlags, which is compact and merges
+/// states with different is_literal values, but for actual transition
+/// calculations we use the richer MatcherState type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct StateKey {
+    pub pattern: StateId,
+    pub trie: TrieId,
+    pub next_component: bool,
+}
+
+impl std::fmt::Display for StateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "t{},p{}", self.trie, self.pattern)?;
+        if self.next_component {
+            write!(f, ",/")?;
+        }
+        Ok(())
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct StateFlags: u8 {
+        const IS_LITERAL = 1;
+    }
+}
+
+impl Default for StateFlags {
     fn default() -> Self {
-        Self {
-            have_sep: false,
-            is_literal: true,
-        }
+        Self::IS_LITERAL
     }
 }
 
-impl StateInfo {
-    fn update(self, c: Option<char>, transition: &Transition) -> Self {
-        Self {
-            have_sep: c.map(is_separator).unwrap_or(self.have_sep),
-            is_literal: self.is_literal && transition.is_literal(),
-        }
-    }
-}
-
-type StateSet = FnvHashMap<MatcherState, StateInfo>;
-
-// Merges state data when two automata arrive at the same state
-fn merge_state(states: &mut StateSet, state: MatcherState, info: StateInfo) -> Option<StateInfo> {
+// Merges state data when two automata arrive at the same state. Returns
+// `Some(merged_flags)` if state changed.
+fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> Option<StateFlags> {
     match states.entry(state) {
         Entry::Occupied(mut entry) => {
-            let merged = StateInfo {
-                have_sep: entry.get().have_sep || info.have_sep,
-                is_literal: entry.get().is_literal || info.is_literal,
-            };
+            let merged = *entry.get() | flags;
             if merged == *entry.get() {
-                return None;
+                None
+            } else {
+                entry.insert(merged);
+                Some(merged)
             }
-            entry.insert(merged);
-            Some(merged)
         }
         Entry::Vacant(entry) => {
-            entry.insert(info);
-            Some(info)
+            entry.insert(flags);
+            Some(flags)
         }
+    }
+}
+
+type StateSet = FnvHashMap<StateKey, StateFlags>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpandedStateFlags {
+    /// True if the state is reachable while only matching literal chars and
+    /// never ?/*/**.
+    is_literal: bool,
+    /// If trie ID points at a matched directory, can follow NextComponent
+    /// transitions which set this flag.
+    next_component: bool,
+}
+
+impl Default for ExpandedStateFlags {
+    fn default() -> Self {
+        Self { is_literal: true, next_component: false }
+    }
+}
+
+impl ExpandedStateFlags {
+    fn with_literal(self, value: bool) -> Self {
+        Self { is_literal: value, ..self }
+    }
+
+    fn with_next_component(self, value: bool) -> Self {
+        Self { next_component: value, ..self }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExpandedState<'a> {
+    pattern: &'a StateMachine,
+    pattern_id: StateId,
+    trie: &'a Trie<TrieEntry>,
+    trie_id: TrieId,
+    flags: ExpandedStateFlags
+}
+
+impl<'a> ExpandedState<'a> {
+    fn raise(
+        pattern: &'a StateMachine,
+        trie: &'a Trie<TrieEntry>,
+        key: StateKey,
+        flags: StateFlags,
+    ) -> Self {
+        let flags = ExpandedStateFlags {
+            next_component: key.next_component,
+            is_literal: flags.contains(StateFlags::IS_LITERAL),
+        };
+        Self {
+            pattern: pattern,
+            pattern_id: key.pattern,
+            trie,
+            trie_id: key.trie,
+            flags,
+        }
+    }
+
+    fn lower(&self) -> (StateKey, StateFlags) {
+        let key = StateKey {
+            pattern: self.pattern_id,
+            trie: self.trie_id,
+            next_component: self.flags.next_component,
+        };
+        let mut flags = StateFlags::default();
+        flags.set(StateFlags::IS_LITERAL, self.flags.is_literal);
+        (key, flags)
+    }
+
+    fn pattern_node(&self) -> &State {
+        &self.pattern[self.pattern_id]
+    }
+
+    fn trie_node(&self) -> &TrieNode {
+        self.trie.get(self.trie_id).unwrap()
+    }
+
+    fn is_match(&self) -> bool {
+        self.trie.get_value(self.trie_id).is_some()
+    }
+
+    fn is_dir(&self) -> bool {
+        self.trie.get_value(self.trie_id).map_or(false, |n| n.is_dir)
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.pattern_id == self.pattern.terminal()
+            && self.trie.get_value(self.trie_id).is_some()
+    }
+
+    fn is_literal(&self) -> bool {
+        self.flags.is_literal
+    }
+
+    /// State has any transitions which are not epsilons
+    fn is_epsilon_frontier(&self) -> bool {
+        if self.flags.next_component {
+            self.pattern_node()
+                .transitions
+                .iter()
+                .any(|t| !matches!(t.rule, TransitionRule::Epsilon | TransitionRule::NextComponent))
+        } else {
+            self.pattern_node()
+                .transitions
+                .iter()
+                .any(|t| !matches!(
+                    t.rule,
+                    TransitionRule::Epsilon
+                        | TransitionRule::WildEpsilon
+                        | TransitionRule::NextComponent,
+                ))
+        }
+    }
+
+    fn follow_char(&self, c: char, transition: &Transition) -> Option<ExpandedStateFlags> {
+        if self.flags.next_component { return None; }
+        match transition.rule {
+            TransitionRule::Char(ch) if c == ch => Some(self.flags),
+            TransitionRule::Char(_) => None,
+            TransitionRule::Wildcard => Some(self.flags.with_literal(false)),
+            // Epsilon
+            TransitionRule::Epsilon
+            | TransitionRule::WildEpsilon
+            | TransitionRule::NextComponent => None,
+        }
+    }
+
+    fn follow_epsilon(&self, transition: &Transition) -> Option<ExpandedStateFlags> {
+        match transition.rule {
+            TransitionRule::Epsilon => Some(self.flags),
+            // This prevents xyz/* from matching bare xyz/
+            TransitionRule::WildEpsilon if self.flags.next_component => None,
+            TransitionRule::WildEpsilon => Some(self.flags.with_literal(false)),
+            TransitionRule::NextComponent if self.is_dir() => Some(self.flags.with_next_component(true)),
+            TransitionRule::NextComponent => None,
+            // Non-epsilon
+            TransitionRule::Char(_) | TransitionRule::Wildcard => None,
+        }
+    }
+
+    /// Follows all state transitions along matching trie edges.
+    fn expand(&self) -> impl Iterator<Item = Self> + '_ {
+        self.trie.children(self.trie_id)
+            .flat_map(move |x| self.pattern[self.pattern_id].transitions.iter().map(move |t| (x, t)))
+            .filter_map(move |((c, tr_id), t)| {
+                #[cfg(test)]
+                let (key, _) = self.lower();
+                if let Some(flags) = self.follow_char(c, t) {
+                    test_log!("{key},{c},{t:?}... match");
+                    Some(Self {
+                        pattern: self.pattern,
+                        pattern_id: t.next,
+                        trie: self.trie,
+                        trie_id: tr_id,
+                        flags,
+                    })
+                } else {
+                    test_log!("{key},{c},{t:?}... no match");
+                    None
+                }
+            })
+    }
+
+    fn expand_epsilon(&self) -> impl Iterator<Item = Self> + '_ {
+        self.pattern[self.pattern_id].transitions.iter()
+            .filter_map(move |t| {
+                #[cfg(test)]
+                let (key, _) = self.lower();
+                if let Some(flags) = self.follow_epsilon(t) {
+                    test_log!("{key},{t:?}... match");
+                    Some(Self {
+                        pattern: self.pattern,
+                        pattern_id: t.next,
+                        trie: self.trie,
+                        trie_id: self.trie_id,
+                        flags,
+                    })
+                } else {
+                    test_log!("{key},{t:?}... no match");
+                    None
+                }
+            })
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Output {
-    pub state: MatcherState,
-    pub info: StateInfo,
+    pub key: StateKey,
+    pub flags: StateFlags,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct MatcherConfig {
-    /// Causes the matcher to accept ancestors of a matching path. For example,
-    /// if `accept_ancestors` is true, then `foo/bar/baz` will match `foo`,
-    /// `foo/bar`, and `foo/bar/baz`.
-    pub accept_ancestors: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Retention {
+    Partial,
+    Recurse,
+    Full,
 }
 
 #[derive(Debug)]
-pub struct Matcher<'m, 't, T> {
-    machine: &'m StateMachine,
-    trie: &'t Trie<T>,
-    config: MatcherConfig,
+pub struct Matcher<'a> {
+    machine: &'a StateMachine,
+    trie: &'a Trie<TrieEntry>,
     states: StateSet,
     old_states: StateSet, // Reuse memory
-    queue: Vec<(MatcherState, StateInfo)>, // Reuse memory
-    accepted: Vec<Output>,
+    queue: Vec<(StateKey, StateFlags)>, // Reuse memory
+    // States that matched a path component but aren't full matches
+    recurse: Vec<Output>,
+    // Full matches
+    full: Vec<Output>,
 }
 
-impl<'m, 't, T> Matcher<'m, 't, T> {
+impl<'a> Matcher<'a> {
     fn new_inner(
-        config: MatcherConfig,
-        machine: &'m StateMachine,
-        trie: &'t Trie<T>,
+        machine: &'a StateMachine,
+        trie: &'a Trie<TrieEntry>,
         states: StateSet,
     ) -> Self {
         Self {
             machine,
             trie,
-            config,
             states,
             old_states: StateSet::with_capacity_and_hasher(
                 machine.states.len(),
                 FnvBuildHasher::new(),
             ),
             queue: Vec::new(),
-            accepted: Vec::new(),
+            recurse: Vec::new(),
+            full: Vec::new(),
         }
     }
 
-    pub fn new(
-        config: MatcherConfig,
-        machine: &'m StateMachine,
-        trie: &'t Trie<T>,
-    ) -> Self {
+    pub fn new(machine: &'a StateMachine, trie: &'a Trie<TrieEntry>) -> Self {
         let mut states =
             StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
-        let initial = MatcherState { nfa: machine.initial(), trie: trie.root() };
-        states.insert(initial, StateInfo::default());
-        Self::new_inner(config, machine, trie, states)
+        let initial = StateKey {
+            pattern: machine.initial(),
+            trie: trie.root(),
+            next_component: false,
+        };
+        states.insert(initial, StateFlags::default());
+        Self::new_inner(machine, trie, states)
     }
 
-    // Construct a matcher with states carried over from the parent directory.
-    pub(crate) fn with_prior_states(
-        config: MatcherConfig,
-        machine: &'m StateMachine,
-        trie: &'t Trie<T>,
-        prior_states: impl IntoIterator<Item = MatcherState>,
-    ) -> Self {
-        let mut states =
-            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
-        for state in prior_states {
-            states.insert(state, StateInfo {
-                // Treat last char as / or \. All Sep transitions will be
-                // skipped by expand_epsilon(). Basically the same effect as if
-                // the first character in the trie were /.
-                have_sep: true,
-                ..Default::default()
-            });
-        }
-        Self::new_inner(config, machine, trie, states)
+    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> Option<StateFlags> {
+        merge_state(&mut self.states, state, flags)
     }
 
-    fn merge_state(&mut self, state: MatcherState, info: StateInfo) -> Option<StateInfo> {
-        merge_state(&mut self.states, state, info)
-    }
-
-    fn enqueue(&mut self, state: MatcherState, info: StateInfo) {
-        if let Some(merged) = self.merge_state(state, info) {
-            self.queue.push((state, merged));
-        }
-    }
-
-    /// Expands active states by following transitions and retaining states
-    /// according to simple rules.
-    fn expand(
-        &mut self,
-        follow: impl Fn(&Transition, &StateInfo) -> bool,
-        retain: impl Fn(&State) -> bool,
-    ) {
-        let machine = self.machine;
-        self.queue.extend(self.states.drain());
-        while let Some((s, info)) = self.queue.pop() {
-            if retain(&machine[s.nfa]) {
-                self.enqueue(s, info);
-            }
-            for t in machine.transitions(s.nfa) {
-                if follow(t, &info) {
-                    self.enqueue(s.with_nfa(t.next), info.update(None, t));
-                }
-            }
-        }
-        self.states.retain(|s, _| retain(&machine[s.nfa]));
-    }
-
-    // Follows epsilon/wild epsilon transitions in the NFA until all states are
-    // on the frontier.
+    /// Follows epsilon transitions (incl. NextComponent) until all states are
+    /// at frontier.
     fn expand_epsilon(&mut self) {
-        self.expand(
-            |trans, info|
-                matches!(trans.rule, TransitionRule::Epsilon | TransitionRule::WildEpsilon)
-                || matches!(trans.rule, TransitionRule::Sep if info.have_sep),
-            |state| state.is_epsilon_frontier,
-        );
-        self.record_accepted();
-    }
+        self.queue.extend(self.states.drain());
+        while let Some((key, flags)) = self.queue.pop() {
+            let state = ExpandedState::raise(&self.machine, &self.trie, key, flags);
+            if merge_state(&mut self.states, key, flags).is_none() {
+                continue;
+            }
 
-    // Follows sep and (literal) epsilon transitions until all states are on
-    // frontier.
-    pub fn expand_sep(&mut self) {
-        self.expand(
-            |trans, _| matches!(trans.rule, TransitionRule::Epsilon | TransitionRule::Sep),
-            |state| state.is_sep_frontier,
-        );
-    }
+            for successor in state.expand_epsilon() {
+                self.queue.push(successor.lower());
+            }
 
-    // Records states which are at the terminal NFA node (full pattern match)
-    // and also at a full node in the trie (full string was inserted).
-    //
-    // These states are still live but the terminal state has no transitions so
-    // they will be cleared out right away.
-    fn record_accepted(&mut self) {
-        let terminal = self.machine.terminal();
-        for (&state, &info) in self.states.iter() {
-            let accept_ancestor = self.config.accept_ancestors
-                && self.machine[state.nfa].accepts_sep;
-            if self.trie.get_value(state.trie).is_some()
-                && (state.nfa == terminal || accept_ancestor)
-            {
-                self.accepted.push(Output { state, info });
+            if state.is_terminal() {
+                self.full.push(Output { key, flags });
+            } else if state.is_epsilon_frontier() && state.flags.next_component {
+                self.recurse.push(Output { key, flags });
             }
         }
+
+        self.states.retain(|key, flags| {
+            ExpandedState::raise(&self.machine, &self.trie, *key, *flags).is_epsilon_frontier()
+        });
     }
 
-    // Follows all possible transitions which consume a character in the trie.
     fn expand_matching(&mut self) {
-        std::mem::swap(&mut self.states, &mut self.old_states);
-        for (&s, info) in self.old_states.iter() {
-            for (c, next_trie) in self.trie.children(s.trie) {
-                for t in self.machine.transitions(s.nfa) {
-                    let next = MatcherState { nfa: t.next, trie: next_trie };
-                    if t.is_any_epsilon() {
-                        test_log!("{c},{next},{t:?}... skipped");
-                    } else if t.matches(c) {
-                        test_log!("{c},{next},{t:?}... matched");
-                        merge_state(&mut self.states, next, info.update(Some(c), t));
-                    } else {
-                        test_log!("{c},{next},{t:?}... failed");
-                    }
+        std::mem::swap(&mut self.old_states, &mut self.states);
+        self.states.clear();
+        for (&src_key, &src_flags) in self.old_states.iter() {
+            let s = ExpandedState::raise(&self.machine, &self.trie, src_key, src_flags);
+            for successor in s.expand() {
+                let (key, flags) = successor.lower();
+                let merged = merge_state(&mut self.states, key, flags).is_some();
+                if merged && successor.is_terminal() {
+                    self.full.push(Output { key, flags });
                 }
             }
         }
-        self.old_states.clear();
     }
 
     // Debug code
-    fn show_states(&self) -> String {
+    fn show_outputs(&self, outputs: impl IntoIterator<Item = Output>) -> String {
         let mut out = String::new();
         let _ = write!(out, "[");
-        for (i, (&s, &info)) in self.states.iter().enumerate() {
+        for (i, Output { key, flags }) in outputs.into_iter().enumerate() {
+            let state = ExpandedState::raise(self.machine, self.trie, key, flags);
             if i > 0 {
                 let _ = write!(out, ", ");
             }
             let _ = write!(
                 out,
-                r#"(t{} "{}", s{} "{}"{}{})"#,
-                s.trie,
-                self.trie.nodes[s.trie as usize].show_accepts(),
-                s.nfa,
-                self.machine[s.nfa].show_accepts(),
-                if info.have_sep { " sep" } else { "" },
-                if info.is_literal { "" } else { " wild" },
+                r#"(t{} "{}", s{} "{}"{})"#,
+                state.trie_id,
+                state.trie_node().show_accepts(),
+                state.pattern_id,
+                state.pattern_node().show_accepts(),
+                if state.is_literal() { " lit" } else { "" },
             );
         }
         let _ = write!(out, "]");
         out
+    }
+
+    fn show_states(&self) -> String {
+        let outputs = self.states.iter().map(|(&key, &flags)| Output { key, flags });
+        self.show_outputs(outputs)
+    }
+
+    fn show_full(&self) -> String {
+        self.show_outputs(self.full.iter().cloned())
+    }
+
+    fn show_recurse(&self) -> String {
+        self.show_outputs(self.recurse.iter().cloned())
     }
 
     fn step(&mut self) {
@@ -284,76 +399,29 @@ impl<'m, 't, T> Matcher<'m, 't, T> {
     // Runs until full trie has been consumed, or no more live states remain.
     pub fn run(&mut self) {
         test_log!("{:?}", self.trie.nodes);
-        test_log!("{:?}", self.machine.states);
         while !self.states.is_empty() {
             self.step();
         }
     }
 
-    pub fn accepted<'a>(&'a self) -> impl Iterator<Item = Output> + 'a {
-        self.accepted.iter().copied()
+    pub fn recurse(&self) -> impl Iterator<Item = Output> + '_ {
+        self.recurse.iter().copied()
+    }
+
+    pub fn full(&self) -> impl Iterator<Item = Output> + '_ {
+        self.full.iter().copied()
     }
 }
 
-fn match_string(machine: &StateMachine, target: &str) -> bool {
-    let mut trie = Trie::new();
-    trie.insert(target, ());
-    let mut matcher = Matcher::new(MatcherConfig::default(), machine, &trie);
-    matcher.run();
-    !matcher.accepted.is_empty()
-}
-
-fn match_trie<'m, 't, T>(
+fn match_trie<'m, 't>(
     machine: &'m StateMachine,
-    trie: &'t Trie<T>,
-    config: MatcherConfig,
-) -> Vec<(&'t T, bool)> {
-    let mut matcher = Matcher::new(config, machine, trie);
+    trie: &'t Trie<TrieEntry>,
+) -> Vec<(usize, bool)> {
+    let mut matcher = Matcher::new(machine, trie);
     matcher.run();
-    matcher
-        .accepted()
-        .map(|a| (trie.get_value(a.state.trie).unwrap(), a.info.is_literal))
+    matcher.full()
+        .map(|m| (trie.get_value(m.key.trie).unwrap().index, m.flags.contains(StateFlags::IS_LITERAL)))
         .collect()
-}
-
-/// Returns matching entries from the current directory given a set of states
-/// from the parent dir that matched the current dir.
-pub fn find_matching_entries<'a, T: Copy>(
-    machine: &StateMachine,
-    trie: &Trie<T>,
-    prior_states: &[StateId],
-) -> Vec<Output> {
-    let config = MatcherConfig {
-        accept_ancestors: true,
-    };
-    let prior_states = prior_states.iter().map(|&s| MatcherState { nfa: s, trie: trie.root() });
-    let mut matcher = Matcher::with_prior_states(config, machine, &trie, prior_states);
-    matcher.run();
-    matcher.accepted
-}
-
-// Logically advances all states past any separator in the pattern. The
-// resulting states are all either terminal (full matches) or trigger
-// recursion into the matched subdirectory.
-pub fn advance_sep<'a, T: Copy>(
-    machine: &StateMachine,
-    trie: &Trie<T>,
-    prior_states: impl IntoIterator<Item = MatcherState>,
-) -> Vec<Output> {
-    let config = MatcherConfig {
-        accept_ancestors: false,
-    };
-    let mut matcher = Matcher::with_prior_states(config, machine, &trie, prior_states);
-    matcher.expand_sep();
-    matcher.states.into_iter()
-        .map(|(state, info)| Output { state, info })
-        .collect()
-}
-
-/// Partitions output states into a pair of sets
-/// `(full_matches, partial_matches)`.
-pub fn partition_states(machine: &StateMachine, accepted: Vec<Output>) -> (Vec<Output>, Vec<Output>) {
-    accepted.into_iter().partition(|a| a.state.nfa == machine.terminal())
 }
 
 #[cfg(test)]
@@ -368,276 +436,44 @@ mod tests {
     }
 
     fn matches(pattern: &str, target: &str) -> bool {
-        match_string(&machine(pattern), target)
-    }
-
-    fn match_all_is_literal<'t>(
-        pattern: &str,
-        targets: &[&'t str],
-    ) -> Vec<(&'t str, bool)> {
-        let trie: Trie<&'t str> = targets.iter().map(|&k| (k, k)).collect();
-        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie, Default::default())
-            .into_iter()
-            .map(|(target, is_literal)| (*target, is_literal))
-            .collect();
-        matches.sort_unstable();
-        matches
-    }
-
-    fn match_all_ancestors<'t>(
-        pattern: &str,
-        targets: &[&'t str],
-    ) -> Vec<&'t str> {
-        let config = MatcherConfig { accept_ancestors: true, ..Default::default() };
-        let trie: Trie<&'t str> = targets.iter().map(|&k| (k, k)).collect();
-        let mut matches: Vec<_> = match_trie(&machine(pattern), &trie, config)
-            .into_iter()
-            .map(|(target, _)| *target)
-            .collect();
-        matches.sort_unstable();
-        matches
+        let mut trie = Trie::new();
+        trie.insert(target, TrieEntry { index: 0, is_dir: false });
+        !match_trie(&machine(pattern), &trie).is_empty()
     }
 
     fn match_all<'t>(pattern: &str, targets: &[&'t str]) -> Vec<&'t str> {
-        match_all_is_literal(pattern, targets)
-            .into_iter()
-            .map(|(target, _)| target)
-            .collect()
-    }
-
-    fn is_literal_match(pattern: &str, target: &str) -> bool {
-        match_all_is_literal(pattern, &[target]).first().unwrap().1
-    }
-
-    #[test]
-    fn test_ancestors() {
-        assert_eq!(
-            match_all_ancestors("foo/bar/baz", &["foo", "foo/bar", "foo/bar/baz", "fo"]),
-            ["foo", "foo/bar", "foo/bar/baz"]
-        );
-        assert_eq!(
-            match_all_ancestors("foo/bar", &["foo", "fo"]),
-            ["foo"]
-        );
-        assert_eq!(
-            match_all_ancestors("foo", &["foo", "fo"]),
-            ["foo"]
-        );
-        assert_eq!(
-            match_all_ancestors("*.rs", &["main.rs", "src", "src/main.rs"]),
-            ["main.rs"]
-        );
-        assert_eq!(
-            match_all_ancestors("src/*.rs", &["src", "src/main.rs"]),
-            ["src", "src/main.rs"]
-        );
-    }
-
-    #[test]
-    fn test_match_one() {
-        assert!(matches("", ""));
-        assert!(!matches("", "a"));
-        assert!(matches("abc", "abc"));
-        assert!(!matches("abc", "ab"));
-        assert!(!matches("abc", "abcd"));
-        assert!(matches("héllo", "héllo"));
-
-        assert!(matches("a/b", "a/b"));
-        assert!(!matches("a/b", "ab"));
-
-        assert!(matches("?", "a"));
-        assert!(matches("?", "é"));
-        assert!(!matches("?", "/"));
-        assert!(!matches("?", ""));
-        assert!(!matches("?", "ab"));
-        assert!(matches("a?c", "abc"));
-        assert!(!matches("a?c", "a/c"));
-
-        assert!(matches("*", ""));
-        assert!(matches("*", "abc"));
-        assert!(!matches("*", "/"));
-        assert!(matches("a*b", "ab"));
-        assert!(matches("a*b", "axxb"));
-        assert!(!matches("a*b", "a/b"));
-
-        assert!(matches("**", ""));
-        assert!(matches("**", "a/b/c"));
-        assert!(matches("a**b", "a/xb"));
-        assert!(!matches("a**b", "a/b/c"));
-        assert!(matches("a/**", "a/b/c"));
-        assert!(!matches("a/**", "a"));
-        assert!(matches("***", "a/b"));
-
-        assert!(matches("{a,b}", "a"));
-        assert!(matches("{a,b}", "b"));
-        assert!(!matches("{a,b}", "c"));
-        assert!(matches("{ab,cd}", "cd"));
-        assert!(matches("{,a}", ""));
-        assert!(matches("{a,{b,c}d}", "bd"));
-        assert!(!matches("{a,{b,c}d}", "bcd"));
-        assert!(matches("{a,*.rs}", "a"));
-        assert!(matches("{a,*.rs}", "main.rs"));
-        assert!(!matches("{a,*.rs}", "b"));
-
-        assert!(matches(r"\*", "*"));
-        assert!(!matches(r"\*", "**"));
-        assert!(matches(r"\?", "?"));
-        assert!(matches(r"\{a\}", "{a}"));
-        assert!(matches(r"a\,b", "a,b"));
-        assert!(matches(r"a\*b", "a*b"));
-
-        assert!(matches(r"\\", "\\"));
-        #[cfg(not(windows))]
-        assert!(!matches(r"\\", "/"));
-        #[cfg(windows)]
-        assert!(matches(r"\\", "/"));
-
-        assert!(matches("?*", "ab"));
-        assert!(!matches("?*", ""));
-        assert!(matches("*/*", "a/b"));
-        assert!(!matches("*/*", "a/b/c"));
-        assert!(matches("**/b", "x/y/b"));
-        assert!(matches("{a,b}?c", "axc"));
-        assert!(matches("./*", "./a"));
-        assert!(matches("*/.", "a/."));
-        assert!(matches("src/**/*.rs", "src/a/b.rs"));
-        assert!(!matches("src/**/*.rs", "src.rs"));
-    }
-
-    #[test]
-    fn test_match_many() {
-        assert_eq!(
-            match_all("*.rs", &["main.rs", "lib.rs", "src", "a/b.rs"]),
-            ["lib.rs", "main.rs"]
-        );
-        assert_eq!(
-            match_all("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
-            ["a", "c.rs", "main.rs"]
-        );
-        assert_eq!(
-            match_all("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
-            ["x/b", "x/y/b"]
-        );
-        assert_eq!(
-            match_all("a*b", &["ab", "axxb", "a/b"]),
-            ["ab", "axxb"]
-        );
-        assert_eq!(
-            match_all(r"\*", &["*", "**"]),
-            ["*"]
-        );
-    }
-
-    #[test]
-    fn test_match_literal() {
-        assert!(is_literal_match("", ""));
-        assert!(is_literal_match("abc", "abc"));
-        assert!(is_literal_match(r"\*", "*"));
-        assert!(is_literal_match(r"a\?c", "a?c"));
-
-        assert!(is_literal_match("a/b", "a/b"));
-        assert!(is_literal_match("a//b", "a/b"));
-        assert!(is_literal_match("a/b", "a//b"));
-
-        assert!(!is_literal_match("?", "a"));
-        assert!(!is_literal_match("a?c", "abc"));
-        assert!(is_literal_match("{a,?}", "a"));
-        assert!(!is_literal_match("{a,?}", "b"));
-
-        assert!(!is_literal_match("*", "."));
-        assert!(!is_literal_match("**", "."));
-        assert!(!is_literal_match(".*", "."));
-        assert!(!is_literal_match("*", ".."));
-        assert!(!is_literal_match("**", ".."));
-        assert!(!is_literal_match(".*", ".."));
-
-        assert!(!is_literal_match("*", ""));
-        assert!(!is_literal_match("*", "abc"));
-        assert!(!is_literal_match("a*", "a"));
-        assert!(!is_literal_match("a*", "ab"));
-        assert!(!is_literal_match(".*", "."));
-        assert!(!is_literal_match("*/", "a/"));
-        assert!(!is_literal_match("**", ""));
-        assert!(!is_literal_match("**", "a/b"));
-        assert!(!is_literal_match("a**b", "ab"));
-        assert!(!is_literal_match("**/b", "x/b"));
-        assert!(!is_literal_match("a/**/b", "a/b"));
-
-        assert!(is_literal_match("a{*,b}c", "abc"));
-        assert!(!is_literal_match("a{*,b}c", "ac"));
-        assert!(!is_literal_match("a{*,b}c", "axc"));
-
-        assert_eq!(
-            match_all_is_literal("{a,*.rs}", &["a", "b", "c.rs", "main.rs"]),
-            [("a", true), ("c.rs", false), ("main.rs", false)]
-        );
-        assert_eq!(
-            match_all_is_literal("a{b,?}c", &["abc", "axc", "abd"]),
-            [("abc", true), ("axc", false)]
-        );
-        assert_eq!(
-            match_all_is_literal("**/b", &["b", "x/b", "x/y/b", "a/b/c"]),
-            [("x/b", false), ("x/y/b", false)]
-        );
-        assert_eq!(
-            match_all_is_literal("a/b", &["a/b", "a//b", "ab"]),
-            [("a//b", true), ("a/b", true)]
-        );
-    }
-
-    #[test]
-    fn test_star_choice() {
-        assert!(!matches("a{*,/}c", "ab/c"));
-    }
-
-    #[test]
-    fn test_multiple_separators_in_target() {
-        assert!(matches("a/b", "a//b"));
-        assert!(matches("a/b", "a///b"));
-        assert!(!matches("a/b", "a/b/c"));
-    }
-
-    #[test]
-    fn test_multiple_separators_in_pattern() {
-        assert!(matches("a//b", "a/b"));
-        assert!(matches("a///b", "a/b"));
-        assert!(!matches("a//b", "ab"));
-        assert!(matches("a/**/b", "a/b"));
-        assert!(matches("a{*/,}/b", "asdf/b"));
-        assert_eq!(
-            match_all("src/**/*.rs", &["src/a/b.rs", "src/main.rs", "src.rs", "src/b.rs"]),
-            ["src/a/b.rs", "src/b.rs", "src/main.rs"]
-        );
-        assert_eq!(
-            match_all("a/**/b", &["a/b", "a//b", "a/x/b", "a/b/c"]),
-            ["a//b", "a/b", "a/x/b"]
-        );
-    }
-
-    #[test]
-    fn test_trivial_walk() {
-        fn find_entries<'a>(m: &StateMachine, s: &[StateId], e: &[&'a str]) -> (Vec<StateId>, Vec<&'a str>) {
-            let trie = e.iter().map(|&s| (s, s)).collect();
-            let matched = find_matching_entries(&m, &trie, &s);
-            let states = matched.iter().map(|m| m.state.nfa).collect();
-            let matches = matched.iter()
-                .map(|m| *trie.get_value(m.state.trie).unwrap())
-                .collect::<Vec<_>>();
-            (states, matches)
+        let mut trie = Trie::new();
+        for (index, target) in targets.iter().enumerate() {
+            trie.insert(target, TrieEntry { index, is_dir: false });
         }
+        let matches = match_trie(&machine(pattern), &trie);
+        matches.into_iter().map(|(i, _)| targets[i]).collect()
+    }
 
-        let m = machine("project/src/*.c");
+    #[test]
+    fn test_matches() {
+        assert!(matches("", ""));
+        assert!(matches("{}", ""));
+        assert!(matches("{,a}", ""));
+        assert!(matches("asdf", "asdf"));
+        assert!(!matches("asdf", "fdsa"));
+        assert!(!matches("asdf", ""));
 
-        let root: &[&str] = &["project", "README.md"];
-        let project: &[&str] = &["src", "tests", "CMakeLists.txt"];
-        let src: &[&str] = &["a.c", "a.h", "b.c", "subdir"];
+        assert!(matches("{a,bc}", "a"));
+        assert!(matches("{a,bc}", "bc"));
+        assert!(!matches("{a,bc}", "b"));
+        assert!(matches("{a,*}", "1"));
+        assert!(matches("{a,*}", "b"));
 
-        let (states, matches) = find_entries(&m, &[m.initial()], root);
-        assert_eq!(matches, ["project"]);
-        let (states, matches) = find_entries(&m, &states, project);
-        assert_eq!(matches, ["src"]);
-        let (_, mut matches) = find_entries(&m, &states, src);
-        matches.sort_unstable();
-        assert_eq!(matches, ["a.c", "b.c"]);
+        assert!(matches("*", "asdf"));
+        assert!(matches("*", ""));
+        assert!(matches("*", "a"));
+        assert!(matches("**", ""));
+        assert!(matches("**", "a"));
+
+        assert!(matches("a*f", "asdf"));
+        assert!(matches("a*f", "af"));
+        assert!(!matches("a*f", "asd"));
+        assert!(!matches("a*f", "asdc"));
     }
 }

@@ -40,6 +40,8 @@ impl TrieNode {
 enum Children {
     Empty,
     Singleton(Char, TrieId),
+    // TODO:
+    //Small(Vec<(Char, TrieId)>),
     Full(Box<FnvHashMap<Char, TrieId>>),
 }
 
@@ -159,13 +161,17 @@ impl<T> Trie<T> {
     }
 
     // Useful for testing
-    pub fn get(&self, key: &str) -> Option<&T> {
+    pub fn get_key(&self, key: &str) -> Option<&T> {
         let mut cur: usize = 0;
         for ch in key.chars() {
             let next = self.nodes[cur].children.get(ch)?;
             cur = next as usize;
         }
         self.values.get(&(cur as TrieId))
+    }
+
+    pub fn get(&self, id: TrieId) -> Option<&TrieNode> {
+        self.nodes.get(id as usize)
     }
 
     pub fn get_value(&self, id: TrieId) -> Option<&T> {
@@ -204,21 +210,21 @@ mod tests {
     #[test]
     fn get_and_insert() {
         let mut trie = Trie::new();
-        assert_eq!(trie.get("foo"), None);
+        assert_eq!(trie.get_key("foo"), None);
 
         trie.insert("foo", 1);
         trie.insert("bar", 2);
         trie.insert("fo", 3);
 
-        assert_eq!(trie.get("foo"), Some(&1));
-        assert_eq!(trie.get("bar"), Some(&2));
-        assert_eq!(trie.get("fo"), Some(&3));
-        assert_eq!(trie.get("f"), None);
-        assert_eq!(trie.get("foos"), None);
-        assert_eq!(trie.get("baz"), None);
+        assert_eq!(trie.get_key("foo"), Some(&1));
+        assert_eq!(trie.get_key("bar"), Some(&2));
+        assert_eq!(trie.get_key("fo"), Some(&3));
+        assert_eq!(trie.get_key("f"), None);
+        assert_eq!(trie.get_key("foos"), None);
+        assert_eq!(trie.get_key("baz"), None);
 
         trie.insert("foo", 4);
-        assert_eq!(trie.get("foo"), Some(&4));
-        assert_eq!(trie.get("fo"), Some(&3));
+        assert_eq!(trie.get_key("foo"), Some(&4));
+        assert_eq!(trie.get_key("fo"), Some(&3));
     }
 }

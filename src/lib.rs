@@ -2,7 +2,9 @@ mod nfa;
 mod pattern;
 mod matcher;
 mod trie;
-mod walker;
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 macro_rules! test_log {

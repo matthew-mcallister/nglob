@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::matcher::{MatcherState, advance_sep, find_matching_entries, partition_states};
 use crate::nfa::{StateId, StateMachine, from_pattern};
 use crate::pattern::Pattern;
+use crate::test_log;
 use crate::trie::Trie;
 use crate::walker::{Entry, FileType, GlobConfig};
 
@@ -30,7 +31,12 @@ fn walk_dir(
     recursion_depth: usize,
     out: &mut Vec<std::io::Result<Entry>>,
 ) {
+    test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
+    #[cfg(test)]
+    let results_start = out.len();
+
     if recursion_depth > config.max_depth {
+        test_log!("maximum recursion depth exceeded");
         out.push(Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "max recursion depth exceeded",
@@ -63,6 +69,8 @@ fn walk_dir(
         }
     }
 
+    test_log!("entries: {:?}", entries);
+
     let trie: Trie<usize> = entries.iter()
         .enumerate()
         .map(|(i, e)| (&e.path, i))
@@ -79,6 +87,10 @@ fn walk_dir(
         machine,
         &trie,
         prior_states,
+    );
+    test_log!(
+        "partial matches: {:?}",
+        accepted.iter().map(|out| &get_entry(out.state).1.path).collect::<fnv::FnvHashSet<_>>(),
     );
     accepted.retain(|out| {
         // Immediately check if "", ".", ".." were literal matches
@@ -117,11 +129,14 @@ fn walk_dir(
     full.sort();
     full.dedup();
     for idx in full {
+        let entry = &entries[idx];
         out.push(Ok(Entry {
-            path: full_path(&entries[idx].path),
-            file_type: entries[idx].file_type,
+            path: full_path(&entry.path),
+            file_type: entry.file_type,
         }));
     }
+
+    test_log!("results: {:?}", &out[results_start..]);
 
     // Group partial matches by directory and trigger recursion
     let mut kernels: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
@@ -130,7 +145,15 @@ fn walk_dir(
         kernels[idx].push(out.state.nfa);
     }
 
+    test_log!(
+        "descending into: {:?}",
+        (0..kernels.len())
+            .filter(|&i| !kernels[i].is_empty())
+            .map(|i| &entries[i].path)
+            .collect::<Vec<_>>(),
+    );
     for (i, states) in kernels.into_iter().enumerate() {
+        if states.is_empty() { continue; }
         let dir = full_path(&entries[i].path);
         walk_dir(
             config,
@@ -177,5 +200,88 @@ pub fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
     GlobResult {
         results,
         _private: (),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::pattern::parse;
+    use crate::testing::create_test_files;
+
+    fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
+        let dir = create_test_files(files);
+        let full = format!("{}/{}", dir.path().display(), pattern);
+        let result = glob(&GlobConfig::default(), &parse(&full).unwrap());
+        let prefix = format!("{}/", dir.path().display());
+        let mut paths: Vec<String> = result
+            .entries()
+            .map(|e| e.path.strip_prefix(&prefix).unwrap().to_owned())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn literal_name() {
+        assert_eq!(
+            glob_files("foo.txt", &["foo.txt", "bar.txt"]),
+            ["foo.txt"]
+        );
+    }
+
+    #[test]
+    fn star_matches_within_component() {
+        assert_eq!(
+            glob_files("*.txt", &["foo.txt", "bar.txt", "baz.rs"]),
+            ["bar.txt", "foo.txt"]
+        );
+    }
+
+    #[test]
+    fn question_matches_one_char() {
+        assert_eq!(
+            glob_files("?.txt", &["a.txt", "ab.txt"]),
+            ["a.txt"]
+        );
+    }
+
+    #[test]
+    fn alternatives() {
+        assert_eq!(
+            glob_files("{cat,dog}.txt", &["cat.txt", "dog.txt", "bird.txt"]),
+            ["cat.txt", "dog.txt"]
+        );
+    }
+
+    #[test]
+    fn starstar_recurses() {
+        assert_eq!(
+            glob_files(
+                "**/*.rs",
+                &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
+            ),
+            ["main.rs", "src/lib.rs", "src/sub/mod.rs"]
+        );
+    }
+
+    #[test]
+    fn star_does_not_cross_separator() {
+        assert_eq!(
+            glob_files(
+                "src/*.rs",
+                &["src/main.rs", "src/lib.rs", "src/sub/mod.rs"]
+            ),
+            ["src/lib.rs", "src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn escaped_star_is_literal() {
+        assert_eq!(
+            glob_files(r"a\*b.txt", &["a*b.txt", "aXb.txt"]),
+            ["a*b.txt"]
+        );
     }
 }
