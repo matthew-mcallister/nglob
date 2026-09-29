@@ -3,8 +3,8 @@ use std::ops::Index;
 
 use smallvec::SmallVec;
 
-use crate::pattern::{Ast, is_escape_char};
-use crate::test_log;
+use crate::pattern::{Ast, ParseError, is_escape_char, parse};
+use crate::SmallString;
 
 pub type StateId = u16;
 
@@ -117,13 +117,12 @@ impl State {
     }
 }
 
-// TODO: Rename to PatternGraph or something
 #[derive(Debug)]
-pub struct StateMachine {
-    pub states: Vec<State>,
+pub(crate) struct PatternBuilder {
+    pub(crate) states: Vec<State>,
 }
 
-impl StateMachine {
+impl PatternBuilder {
     pub fn new() -> Self {
         let states = vec![
             State::default(), // Initial
@@ -144,39 +143,9 @@ impl StateMachine {
         let state = &mut self.states[from as usize];
         state.transitions.push(transition);
     }
-
-    pub fn transitions(&self, from: StateId) -> impl Iterator<Item = &'_ Transition> + '_ {
-        self.states[from as usize].transitions.iter()
-    }
-
-    #[cfg(test)]
-    pub fn between(&self, from: StateId, to: StateId) -> Vec<TransitionRule> {
-        self.states[from as usize].transitions.iter()
-            .filter(|t| t.next == to)
-            .map(|t| t.rule)
-            .collect()
-    }
-
-    pub fn initial(&self) -> StateId {
-        0
-    }
-
-    pub fn terminal(&self) -> StateId {
-        1
-    }
 }
 
-impl Index<StateId> for StateMachine {
-    type Output = State;
-
-    fn index(&self, index: StateId) -> &Self::Output {
-        &self.states[index as usize]
-    }
-}
-
-/// Compiles `ast` into `sm` as a sub-machine entering at `initial` and
-/// exiting at `terminal`.
-pub fn compile(sm: &mut StateMachine, ast: &Ast, initial: StateId, terminal: StateId) {
+fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: StateId) {
     match ast {
         Ast::Empty => sm.connect(initial, Transition::epsilon(terminal)),
         Ast::Char(c) => sm.connect(initial, Transition::chr(*c, terminal)),
@@ -220,9 +189,50 @@ pub fn compile(sm: &mut StateMachine, ast: &Ast, initial: StateId, terminal: Sta
     }
 }
 
-pub fn from_pattern(ast: &Ast) -> StateMachine {
-    let mut sm = StateMachine::new();
-    compile(&mut sm, ast, 0, 1);
-    test_log!("{:?}", sm.states);
-    sm
+#[derive(Debug)]
+pub struct Pattern {
+    pub(crate) base_path: SmallString,
+    pub(crate) source: SmallString,
+    pub(crate) states: Vec<State>,
+}
+
+impl Index<StateId> for Pattern {
+    type Output = State;
+
+    fn index(&self, index: StateId) -> &Self::Output {
+        &self.states[index as usize]
+    }
+}
+
+impl Pattern {
+    pub fn compile(source: &str) -> Result<Self, ParseError> {
+        let parsed = parse(source)?;
+        let mut builder = PatternBuilder::new();
+        compile(&mut builder, &parsed.root, 0, 1);
+        Ok(Self {
+            base_path: parsed.base.into(),
+            source: source.into(),
+            states: builder.states,
+        })
+    }
+
+    pub fn transitions(&self, from: StateId) -> impl Iterator<Item = &'_ Transition> + '_ {
+        self.states[from as usize].transitions.iter()
+    }
+
+    #[cfg(test)]
+    pub fn between(&self, from: StateId, to: StateId) -> Vec<TransitionRule> {
+        self.states[from as usize].transitions.iter()
+            .filter(|t| t.next == to)
+            .map(|t| t.rule)
+            .collect()
+    }
+
+    pub fn initial(&self) -> StateId {
+        0
+    }
+
+    pub fn terminal(&self) -> StateId {
+        1
+    }
 }

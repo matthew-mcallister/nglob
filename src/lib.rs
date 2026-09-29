@@ -19,3 +19,5 @@ macro_rules! test_log {
 }
 
 pub(crate) use test_log;
+
+pub(crate) type SmallString = smallstr::SmallString<[u8; 23]>;

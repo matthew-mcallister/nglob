@@ -132,9 +132,9 @@ pub(crate) enum Ast {
 ///
 /// # Path separators
 ///
-/// On Windows, both `/` and `\\` will be accepted as separators
+/// On Windows, both `/` and `\\` will be accepted as separators.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Pattern {
+pub(crate) struct ParsedPattern {
     /// Base directory for search
     pub(crate) base: String,
     /// Root of AST
@@ -240,11 +240,11 @@ pub(crate) fn parse_ast(input: &str) -> Result<Ast, ParseError> {
     parse_sequence(&mut Tokens { input }, |_| false)
 }
 
-pub(crate) fn parse(input: &str) -> Result<Pattern, ParseError> {
+pub(crate) fn parse(input: &str) -> Result<ParsedPattern, ParseError> {
     let mut input = Tokens { input };
     let base = parse_base(&mut input)?;
     let root = parse_sequence(&mut input, |_| false)?;
-    Ok(Pattern {
+    Ok(ParsedPattern {
         base,
         root,
     })
@@ -260,8 +260,8 @@ mod tests {
         parse_ast(s).unwrap()
     }
 
-    fn pattern(base: &str, root: Ast) -> Pattern {
-        Pattern {
+    fn pattern(base: &str, root: Ast) -> ParsedPattern {
+        ParsedPattern {
             base: base.into(),
             root,
         }

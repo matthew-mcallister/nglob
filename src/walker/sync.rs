@@ -2,8 +2,8 @@ use std::io::Result;
 use std::path::Path;
 
 use crate::matcher::{MatcherState, advance_sep, find_matching_entries, partition_states};
-use crate::nfa::{StateId, StateMachine, from_pattern};
-use crate::pattern::Pattern;
+use crate::nfa::{StateId, Pattern, from_pattern};
+use crate::pattern::ParsedPattern;
 use crate::test_log;
 use crate::trie::Trie;
 use crate::walker::{Entry, FileType, GlobConfig};
@@ -25,7 +25,7 @@ fn from_dir_entry(entry: std::fs::DirEntry) -> Result<Entry> {
 
 fn walk_dir(
     config: &GlobConfig,
-    machine: &StateMachine,
+    machine: &Pattern,
     cur_dir: &Path,
     prior_states: &[StateId],
     recursion_depth: usize,
@@ -186,7 +186,7 @@ impl GlobResult {
     }
 }
 
-pub fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
+pub fn glob(config: &GlobConfig, pattern: &ParsedPattern) -> GlobResult {
     let machine = from_pattern(&pattern.root);
     let mut results = Vec::new();
     walk_dir(

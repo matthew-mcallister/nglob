@@ -65,6 +65,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "fnv",
+ "smallstr",
  "smallvec",
  "tempfile",
 ]
@@ -92,6 +93,15 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "windows-sys",
+]
+
+[[package]]
+name = "smallstr"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "862077b1e764f04c251fe82a2ef562fd78d7cadaeb072ca7c2bcaf7217b1ff3b"
+dependencies = [
+ "smallvec",
 ]
 
 [[package]]

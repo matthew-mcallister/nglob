@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use fnv::{FnvBuildHasher, FnvHashMap};
 
-use crate::nfa::{State, StateId, StateMachine, Transition, TransitionRule};
+use crate::nfa::{State, StateId, Pattern, Transition, TransitionRule};
 use crate::test_log;
 use crate::trie::{Trie, TrieId, TrieNode};
 
@@ -46,9 +46,14 @@ impl Default for StateFlags {
     }
 }
 
-// Merges state data when two automata arrive at the same state. Returns
-// `Some(merged_flags)` if state changed.
-fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> Option<StateFlags> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MergeResult {
+    Inserted,
+    Merged,
+}
+
+// Merges state data when two automata arrive at the same state.
+fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> Option<MergeResult> {
     match states.entry(state) {
         Entry::Occupied(mut entry) => {
             let merged = *entry.get() | flags;
@@ -56,12 +61,12 @@ fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> Opt
                 None
             } else {
                 entry.insert(merged);
-                Some(merged)
+                Some(MergeResult::Merged)
             }
         }
         Entry::Vacant(entry) => {
             entry.insert(flags);
-            Some(flags)
+            Some(MergeResult::Inserted)
         }
     }
 }
@@ -96,7 +101,7 @@ impl ExpandedStateFlags {
 
 #[derive(Clone, Copy, Debug)]
 struct ExpandedState<'a> {
-    pattern: &'a StateMachine,
+    pattern: &'a Pattern,
     pattern_id: StateId,
     trie: &'a Trie<TrieEntry>,
     trie_id: TrieId,
@@ -105,7 +110,7 @@ struct ExpandedState<'a> {
 
 impl<'a> ExpandedState<'a> {
     fn raise(
-        pattern: &'a StateMachine,
+        pattern: &'a Pattern,
         trie: &'a Trie<TrieEntry>,
         key: StateKey,
         flags: StateFlags,
@@ -265,7 +270,7 @@ enum Retention {
 
 #[derive(Debug)]
 pub struct Matcher<'a> {
-    machine: &'a StateMachine,
+    machine: &'a Pattern,
     trie: &'a Trie<TrieEntry>,
     states: StateSet,
     old_states: StateSet, // Reuse memory
@@ -278,7 +283,7 @@ pub struct Matcher<'a> {
 
 impl<'a> Matcher<'a> {
     fn new_inner(
-        machine: &'a StateMachine,
+        machine: &'a Pattern,
         trie: &'a Trie<TrieEntry>,
         states: StateSet,
     ) -> Self {
@@ -296,7 +301,7 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    pub fn new(machine: &'a StateMachine, trie: &'a Trie<TrieEntry>) -> Self {
+    pub fn new(machine: &'a Pattern, trie: &'a Trie<TrieEntry>) -> Self {
         let mut states =
             StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
         let initial = StateKey {
@@ -308,7 +313,7 @@ impl<'a> Matcher<'a> {
         Self::new_inner(machine, trie, states)
     }
 
-    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> Option<StateFlags> {
+    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> Option<MergeResult> {
         merge_state(&mut self.states, state, flags)
     }
 
@@ -318,13 +323,14 @@ impl<'a> Matcher<'a> {
         self.queue.extend(self.states.drain());
         while let Some((key, flags)) = self.queue.pop() {
             let state = ExpandedState::raise(&self.machine, &self.trie, key, flags);
-            if merge_state(&mut self.states, key, flags).is_none() {
-                continue;
-            }
+            let Some(merged) = merge_state(&mut self.states, key, flags) else { continue };
 
             for successor in state.expand_epsilon() {
                 self.queue.push(successor.lower());
             }
+
+            // Don't insert duplicates
+            if merged == MergeResult::Merged { continue; }
 
             if state.is_terminal() {
                 self.full.push(Output { key, flags });
@@ -345,8 +351,8 @@ impl<'a> Matcher<'a> {
             let s = ExpandedState::raise(&self.machine, &self.trie, src_key, src_flags);
             for successor in s.expand() {
                 let (key, flags) = successor.lower();
-                let merged = merge_state(&mut self.states, key, flags).is_some();
-                if merged && successor.is_terminal() {
+                let merge = merge_state(&mut self.states, key, flags);
+                if merge == Some(MergeResult::Inserted) && successor.is_terminal() {
                     self.full.push(Output { key, flags });
                 }
             }
@@ -414,7 +420,7 @@ impl<'a> Matcher<'a> {
 }
 
 fn match_trie<'m, 't>(
-    machine: &'m StateMachine,
+    machine: &'m Pattern,
     trie: &'t Trie<TrieEntry>,
 ) -> Vec<(usize, bool)> {
     let mut matcher = Matcher::new(machine, trie);
@@ -426,19 +432,13 @@ fn match_trie<'m, 't>(
 
 #[cfg(test)]
 mod tests {
-    use crate::nfa::from_pattern;
-    use crate::pattern::parse_ast;
-
     use super::*;
-
-    fn machine(s: &str) -> StateMachine {
-        from_pattern(&parse_ast(s).unwrap())
-    }
 
     fn matches(pattern: &str, target: &str) -> bool {
         let mut trie = Trie::new();
         trie.insert(target, TrieEntry { index: 0, is_dir: false });
-        !match_trie(&machine(pattern), &trie).is_empty()
+        let pattern = Pattern::compile(pattern).unwrap();
+        !match_trie(&pattern, &trie).is_empty()
     }
 
     fn match_all<'t>(pattern: &str, targets: &[&'t str]) -> Vec<&'t str> {
@@ -446,7 +446,8 @@ mod tests {
         for (index, target) in targets.iter().enumerate() {
             trie.insert(target, TrieEntry { index, is_dir: false });
         }
-        let matches = match_trie(&machine(pattern), &trie);
+        let pattern = Pattern::compile(pattern).unwrap();
+        let matches = match_trie(&pattern, &trie);
         matches.into_iter().map(|(i, _)| targets[i]).collect()
     }
 
