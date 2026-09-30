@@ -418,6 +418,7 @@ impl<'a> Matcher<'a> {
 
     // Runs until full trie has been consumed, or no more live states remain.
     pub fn run(&mut self) {
+        test_log!("{:?}", self.machine.states);
         test_log!("{:?}", self.trie.nodes);
         while !self.states.is_empty() {
             self.step();
@@ -449,7 +450,7 @@ mod tests {
     fn matches(pattern: &str, target: &str) -> bool {
         let mut trie = Trie::new();
         trie.insert(target, TrieEntry { index: 0, is_dir: false, is_literal: false });
-        let pattern = Pattern::compile(pattern).unwrap();
+        let pattern = Pattern::compile_without_base(pattern).unwrap();
         !match_trie(&pattern, &trie).is_empty()
     }
 
@@ -458,7 +459,7 @@ mod tests {
         for (index, target) in targets.iter().enumerate() {
             trie.insert(target, TrieEntry { index: index as u32, is_dir: false, is_literal: false });
         }
-        let pattern = Pattern::compile(pattern).unwrap();
+        let pattern = Pattern::compile_without_base(pattern).unwrap();
         let matches = match_trie(&pattern, &trie);
         matches.into_iter().map(|Output { index, .. }| targets[index]).collect()
     }
@@ -469,6 +470,7 @@ mod tests {
         assert!(matches("{}", ""));
         assert!(matches("{,a}", ""));
         assert!(matches("asdf", "asdf"));
+        assert!(matches("{a}{b}", "ab"));
         assert!(!matches("asdf", "fdsa"));
         assert!(!matches("asdf", ""));
         assert!(!matches("asd", "asdf"));

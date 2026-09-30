@@ -45,7 +45,7 @@ impl Transition {
     pub fn wild_epsilon(next: StateId) -> Self {
         Self {
             next,
-            rule: TransitionRule::Epsilon,
+            rule: TransitionRule::WildEpsilon,
         }
     }
 
@@ -135,16 +135,11 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
             sm.connect(loop_state, Transition::wildcard(loop_state));
         }
         Ast::StarStar => {
-            // Branch 1: loop, matches one or more components
             let loop_state = sm.new_state();
             sm.connect(initial, Transition::epsilon(loop_state));
             sm.connect(loop_state, Transition::wild_epsilon(terminal));
             sm.connect(loop_state, Transition::wildcard(loop_state));
             sm.connect(loop_state, Transition::next_component(loop_state));
-
-            // Branch 2: matches zero components
-            let skip_state = sm.new_state();
-            sm.connect(skip_state, Transition::next_component(terminal));
         }
         Ast::Sequence(nodes) => {
             let mut initial = initial;
@@ -193,6 +188,18 @@ impl Pattern {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn compile_without_base(source: &str) -> Result<Self, ParseError> {
+        let ast = crate::pattern::parse_ast(source)?;
+        let mut builder = PatternBuilder::new();
+        compile(&mut builder, &ast, 0, 1);
+        Ok(Self {
+            base_path: "".into(),
+            source: source.into(),
+            states: builder.states,
+        })
+    }
+
     pub fn transitions(&self, from: StateId) -> impl Iterator<Item = &'_ Transition> + '_ {
         self.states[from as usize].transitions.iter()
     }
@@ -211,5 +218,60 @@ impl Pattern {
 
     pub fn terminal(&self) -> StateId {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use TransitionRule::*;
+
+    fn machine(s: &str) -> Pattern {
+        Pattern::compile(s).unwrap()
+    }
+
+    #[test]
+    fn test_compile() {
+        let p = machine("");
+        assert_eq!(&p.base_path[..], "");
+        assert_eq!(p.between(0, 1), vec![Epsilon]);
+
+        let p = machine("a");
+        assert_eq!(&p.base_path[..], "a");
+        assert_eq!(p.between(0, 1), vec![Epsilon]);
+
+        let p = machine("?");
+        assert_eq!(&p.base_path[..], "");
+        assert_eq!(p.between(0, 1), vec![Wildcard]);
+
+        let p = machine("?/");
+        assert_eq!(p.between(0, 2), vec![Wildcard]);
+        assert_eq!(p.between(2, 1), vec![NextComponent]);
+
+        let p = machine("*");
+        assert_eq!(p.between(0, 2), vec![WildEpsilon]);
+        assert_eq!(p.between(2, 2), vec![Wildcard]);
+        assert_eq!(p.between(2, 1), vec![WildEpsilon]);
+
+        let p = machine("**");
+        assert_eq!(p.between(0, 2), vec![Epsilon]);
+        assert_eq!(p.between(2, 2), vec![Wildcard, NextComponent]);
+        assert_eq!(p.between(2, 1), vec![WildEpsilon]);
+
+        let p = machine("a?c");
+        assert_eq!(p.between(0, 2), vec![Char('a')]);
+        assert_eq!(p.between(2, 3), vec![Wildcard]);
+        assert_eq!(p.between(3, 1), vec![Char('c')]);
+
+        let p = machine("{a,b}");
+        assert_eq!(p.between(0, 1), vec![Char('a'), Char('b')]);
+
+        let p = machine("{ab,cd}");
+        assert_eq!(p.between(0, 2), vec![Char('a')]);
+        assert_eq!(p.between(2, 1), vec![Char('b')]);
+        assert_eq!(p.between(0, 3), vec![Char('c')]);
+        assert_eq!(p.between(3, 1), vec![Char('d')]);
+        assert_eq!(p.between(0, 1), vec![]);
     }
 }

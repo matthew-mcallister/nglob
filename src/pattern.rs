@@ -236,6 +236,7 @@ fn parse_alternative(tokens: &mut Tokens) -> Result<Ast, ParseError> {
     Ok(Ast::Alternative(branches))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_ast(input: &str) -> Result<Ast, ParseError> {
     parse_sequence(&mut Tokens { input }, |_| false)
 }
