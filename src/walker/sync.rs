@@ -217,7 +217,6 @@ mod tests {
         paths
     }
 
-    #[ignore]
     #[test]
     fn literal_name() {
         assert_eq!(
@@ -226,7 +225,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn star_matches_within_component() {
         assert_eq!(
@@ -244,7 +242,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn alternatives() {
         assert_eq!(
@@ -265,7 +262,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn star_does_not_cross_separator() {
         assert_eq!(
