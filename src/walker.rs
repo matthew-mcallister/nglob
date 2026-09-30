@@ -29,12 +29,12 @@ pub struct Entry {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct GlobConfig {
-   /// If true, follows symlinks to the file or directory they point to.
-   /// Otherwise, symlinks are treated as "other" files. Default: `true`.
+   /// If true, follows symlinks to the file or directory they point to. If
+   /// false, symlinks are treated as irregular files. Default: `true`.
    pub follow_symlinks: bool,
    /// Maximum recursion depth. Default: 64.
    pub max_depth: usize,
-   /// Matches files. Default: `true`.
+   /// Matches regular files. Default: `true`.
    pub match_files: bool,
    /// Matches directories. Default: `true`.
    pub match_directories: bool,

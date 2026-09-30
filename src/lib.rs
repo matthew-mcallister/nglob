@@ -2,6 +2,7 @@ mod nfa;
 mod pattern;
 mod matcher;
 mod trie;
+mod walker;
 
 #[cfg(test)]
 mod testing;

@@ -69,32 +69,9 @@ impl Transition {
             rule: TransitionRule::Wildcard,
         }
     }
-
-    pub fn is_literal(&self) -> bool {
-        self.rule.is_literal()
-    }
-
-    pub fn is_wild(&self) -> bool {
-        !self.rule.is_literal()
-    }
-
-    pub fn is_epsilon(&self) -> bool {
-        matches!(self.rule, TransitionRule::Epsilon | TransitionRule::WildEpsilon)
-    }
-
-    pub fn matches(&self, token: char) -> bool {
-        match self.rule {
-            TransitionRule::Char(c) => token == c,
-            TransitionRule::Wildcard => true,
-            TransitionRule::Epsilon
-            | TransitionRule::WildEpsilon
-            | TransitionRule::NextComponent
-            => false,
-        }
-    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct State {
     pub transitions: SmallVec<[Transition; 1]>,
 }
@@ -189,7 +166,7 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Pattern {
     pub(crate) base_path: SmallString,
     pub(crate) source: SmallString,

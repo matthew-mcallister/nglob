@@ -9,8 +9,10 @@ use crate::trie::{Trie, TrieId, TrieNode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrieEntry {
-    pub index: usize,
+    pub index: u32,
     pub is_dir: bool,
+    /// If true, only literal patterns match. Used by ""/"."/".."
+    pub is_literal: bool,
 }
 
 /// We store live states as StateKey + StateFlags, which is compact and merges
@@ -147,17 +149,23 @@ impl<'a> ExpandedState<'a> {
         self.trie.get(self.trie_id).unwrap()
     }
 
-    fn is_match(&self) -> bool {
-        self.trie.get_value(self.trie_id).is_some()
+    fn trie_entry(&self) -> Option<&TrieEntry> {
+        self.trie.get_value(self.trie_id)
     }
 
     fn is_dir(&self) -> bool {
-        self.trie.get_value(self.trie_id).map_or(false, |n| n.is_dir)
+        self.trie_entry().map_or(false, |n| n.is_dir)
     }
 
-    fn is_terminal(&self) -> bool {
-        self.pattern_id == self.pattern.terminal()
-            && self.trie.get_value(self.trie_id).is_some()
+    fn is_match(&self) -> bool {
+        if self.pattern_id == self.pattern.terminal()
+            && let Some(entry) = self.trie_entry()
+            && (!entry.is_literal || self.is_literal())
+        {
+            true
+        } else {
+            false
+        }
     }
 
     fn is_literal(&self) -> bool {
@@ -257,8 +265,9 @@ impl<'a> ExpandedState<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Output {
-    pub key: StateKey,
-    pub flags: StateFlags,
+    pub state: StateId,
+    pub index: usize,
+    pub is_literal: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,15 +291,34 @@ pub struct Matcher<'a> {
 }
 
 impl<'a> Matcher<'a> {
-    fn new_inner(
+    pub fn new(
         machine: &'a Pattern,
         trie: &'a Trie<TrieEntry>,
-        states: StateSet,
+        states: Option<Vec<StateId>>,
     ) -> Self {
+        let mut s =
+            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
+        if let Some(states) = states {
+            for state in states {
+                let key = StateKey {
+                    pattern: state,
+                    trie: trie.root(),
+                    next_component: false,
+                };
+                s.insert(key, Default::default());
+            }
+        } else {
+            let initial = StateKey {
+                pattern: machine.initial(),
+                trie: trie.root(),
+                next_component: false,
+            };
+            s.insert(initial, Default::default());
+        }
         Self {
             machine,
             trie,
-            states,
+            states: s,
             old_states: StateSet::with_capacity_and_hasher(
                 machine.states.len(),
                 FnvBuildHasher::new(),
@@ -299,18 +327,6 @@ impl<'a> Matcher<'a> {
             recurse: Vec::new(),
             full: Vec::new(),
         }
-    }
-
-    pub fn new(machine: &'a Pattern, trie: &'a Trie<TrieEntry>) -> Self {
-        let mut states =
-            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
-        let initial = StateKey {
-            pattern: machine.initial(),
-            trie: trie.root(),
-            next_component: false,
-        };
-        states.insert(initial, StateFlags::default());
-        Self::new_inner(machine, trie, states)
     }
 
     fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> Option<MergeResult> {
@@ -332,10 +348,17 @@ impl<'a> Matcher<'a> {
             // Don't insert duplicates
             if merged == MergeResult::Merged { continue; }
 
-            if state.is_terminal() {
-                self.full.push(Output { key, flags });
-            } else if state.is_epsilon_frontier() && state.flags.next_component {
-                self.recurse.push(Output { key, flags });
+            if let Some(e) = self.trie.get_value(key.trie) {
+                let output = Output {
+                    state: key.pattern,
+                    index: e.index as usize,
+                    is_literal: flags.contains(StateFlags::IS_LITERAL),
+                };
+                if state.is_match() {
+                    self.full.push(output);
+                } else if state.is_epsilon_frontier() && state.flags.next_component {
+                    self.recurse.push(output);
+                }
             }
         }
 
@@ -352,19 +375,23 @@ impl<'a> Matcher<'a> {
             for successor in s.expand() {
                 let (key, flags) = successor.lower();
                 let merge = merge_state(&mut self.states, key, flags);
-                if merge == Some(MergeResult::Inserted) && successor.is_terminal() {
-                    self.full.push(Output { key, flags });
+                if merge == Some(MergeResult::Inserted) && successor.is_match() {
+                    self.full.push(Output {
+                        state: key.pattern,
+                        index: successor.trie_entry().unwrap().index as usize,
+                        is_literal: flags.contains(StateFlags::IS_LITERAL),
+                    });
                 }
             }
         }
     }
 
     // Debug code
-    fn show_outputs(&self, outputs: impl IntoIterator<Item = Output>) -> String {
+    fn show_states(&self) -> String {
         let mut out = String::new();
         let _ = write!(out, "[");
-        for (i, Output { key, flags }) in outputs.into_iter().enumerate() {
-            let state = ExpandedState::raise(self.machine, self.trie, key, flags);
+        for (i, (key, flags)) in self.states.iter().enumerate() {
+            let state = ExpandedState::raise(self.machine, self.trie, *key, *flags);
             if i > 0 {
                 let _ = write!(out, ", ");
             }
@@ -375,24 +402,11 @@ impl<'a> Matcher<'a> {
                 state.trie_node().show_accepts(),
                 state.pattern_id,
                 state.pattern_node().show_accepts(),
-                if state.is_literal() { " lit" } else { "" },
+                if flags.contains(StateFlags::IS_LITERAL) { " lit" } else { "" },
             );
         }
         let _ = write!(out, "]");
         out
-    }
-
-    fn show_states(&self) -> String {
-        let outputs = self.states.iter().map(|(&key, &flags)| Output { key, flags });
-        self.show_outputs(outputs)
-    }
-
-    fn show_full(&self) -> String {
-        self.show_outputs(self.full.iter().cloned())
-    }
-
-    fn show_recurse(&self) -> String {
-        self.show_outputs(self.recurse.iter().cloned())
     }
 
     fn step(&mut self) {
@@ -414,20 +428,18 @@ impl<'a> Matcher<'a> {
         self.recurse.iter().copied()
     }
 
-    pub fn full(&self) -> impl Iterator<Item = Output> + '_ {
-        self.full.iter().copied()
+    pub fn full(&self) -> &[Output] {
+        &self.full
     }
 }
 
 fn match_trie<'m, 't>(
     machine: &'m Pattern,
     trie: &'t Trie<TrieEntry>,
-) -> Vec<(usize, bool)> {
-    let mut matcher = Matcher::new(machine, trie);
+) -> Vec<Output> {
+    let mut matcher = Matcher::new(machine, trie, None);
     matcher.run();
-    matcher.full()
-        .map(|m| (trie.get_value(m.key.trie).unwrap().index, m.flags.contains(StateFlags::IS_LITERAL)))
-        .collect()
+    matcher.full
 }
 
 #[cfg(test)]
@@ -436,7 +448,7 @@ mod tests {
 
     fn matches(pattern: &str, target: &str) -> bool {
         let mut trie = Trie::new();
-        trie.insert(target, TrieEntry { index: 0, is_dir: false });
+        trie.insert(target, TrieEntry { index: 0, is_dir: false, is_literal: false });
         let pattern = Pattern::compile(pattern).unwrap();
         !match_trie(&pattern, &trie).is_empty()
     }
@@ -444,11 +456,11 @@ mod tests {
     fn match_all<'t>(pattern: &str, targets: &[&'t str]) -> Vec<&'t str> {
         let mut trie = Trie::new();
         for (index, target) in targets.iter().enumerate() {
-            trie.insert(target, TrieEntry { index, is_dir: false });
+            trie.insert(target, TrieEntry { index: index as u32, is_dir: false, is_literal: false });
         }
         let pattern = Pattern::compile(pattern).unwrap();
         let matches = match_trie(&pattern, &trie);
-        matches.into_iter().map(|(i, _)| targets[i]).collect()
+        matches.into_iter().map(|Output { index, .. }| targets[index]).collect()
     }
 
     #[test]
@@ -459,6 +471,7 @@ mod tests {
         assert!(matches("asdf", "asdf"));
         assert!(!matches("asdf", "fdsa"));
         assert!(!matches("asdf", ""));
+        assert!(!matches("asd", "asdf"));
 
         assert!(matches("{a,bc}", "a"));
         assert!(matches("{a,bc}", "bc"));
