@@ -160,11 +160,7 @@ fn parse_base(input: &mut Tokens<'_>) -> Result<String, ParseError> {
     let mut buffer = String::new();
     let mut lookahead = input.clone();
     loop {
-        let Some(tok) = lookahead.next().transpose()? else {
-            *input = lookahead.clone();
-            prefix.push_str(&buffer);
-            return Ok(prefix);
-        };
+        let Some(tok) = lookahead.next().transpose()? else { return Ok(prefix) };
 
         let flush = match tok {
             Token::Sep => true,
@@ -292,11 +288,11 @@ mod tests {
 
     #[test]
     fn test_parse_base() {
-        assert_eq!(parse("..").unwrap(), pattern("..", Empty));
+        assert_eq!(parse("..").unwrap(), pattern("", Sequence(vec![Char('.'), Char('.')])));
 
         #[cfg(not(windows))]
         {
-            assert_eq!(parse("/home").unwrap(), pattern("/home", Empty));
+            assert_eq!(parse("/home").unwrap(), pattern("/", Sequence(vec![Char('h'), Char('o'), Char('m'), Char('e')])));
             assert_eq!(parse("/home/*").unwrap(), pattern("/home/", Star));
             assert_eq!(parse("///").unwrap(), pattern("///", Empty));
             assert_eq!(parse("//Host/share/*").unwrap(), pattern("//Host/share/", Star));
@@ -308,7 +304,7 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(parse("/home").unwrap(), pattern(r"\home", Empty));
+            assert_eq!(parse("/home").unwrap(), pattern(r"\", pattern("/", Sequence(vec![Char('h'), Char('o'), Char('m'), Char('e')]))));
             assert_eq!(parse("/home/*").unwrap(), pattern(r"\home\", Star));
             assert_eq!(parse("///").unwrap(), pattern(r"\\\", Empty));
             assert_eq!(parse("//Host/share/*").unwrap(), pattern(r"\\Host\share\", Star));

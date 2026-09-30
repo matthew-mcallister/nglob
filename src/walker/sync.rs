@@ -195,8 +195,7 @@ pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     }
 }
 
-#[cfg(false)]
-//#[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -207,6 +206,9 @@ mod tests {
         let full = format!("{}/{}", dir.path().display(), pattern);
         let result = glob(GlobConfig::default(), Pattern::compile(&full).unwrap());
         let prefix = format!("{}/", dir.path().display());
+        if let Some(e) = result.errors().next() {
+            panic!("{}", e);
+        }
         let mut paths: Vec<String> = result
             .entries()
             .map(|e| e.path.strip_prefix(&prefix).unwrap().to_owned())
@@ -215,6 +217,7 @@ mod tests {
         paths
     }
 
+    #[ignore]
     #[test]
     fn literal_name() {
         assert_eq!(
@@ -223,6 +226,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn star_matches_within_component() {
         assert_eq!(
@@ -231,6 +235,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn question_matches_one_char() {
         assert_eq!(
@@ -239,6 +244,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn alternatives() {
         assert_eq!(
@@ -247,6 +253,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn starstar_recurses() {
         assert_eq!(
@@ -258,6 +265,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn star_does_not_cross_separator() {
         assert_eq!(

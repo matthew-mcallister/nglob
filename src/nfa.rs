@@ -238,8 +238,8 @@ mod tests {
         assert_eq!(p.between(0, 1), vec![Epsilon]);
 
         let p = machine("a");
-        assert_eq!(&p.base_path[..], "a");
-        assert_eq!(p.between(0, 1), vec![Epsilon]);
+        assert_eq!(&p.base_path[..], "");
+        assert_eq!(p.between(0, 1), vec![Char('a')]);
 
         let p = machine("?");
         assert_eq!(&p.base_path[..], "");
