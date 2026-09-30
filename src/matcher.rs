@@ -48,27 +48,22 @@ impl Default for StateFlags {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MergeResult {
-    Inserted,
-    Merged,
-}
-
-// Merges state data when two automata arrive at the same state.
-fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> Option<MergeResult> {
+// Merges state data when two automata arrive at the same state. Returns
+// true if the state changed.
+fn merge_state(states: &mut StateSet, state: StateKey, flags: StateFlags) -> bool {
     match states.entry(state) {
         Entry::Occupied(mut entry) => {
             let merged = *entry.get() | flags;
             if merged == *entry.get() {
-                None
+                false
             } else {
                 entry.insert(merged);
-                Some(MergeResult::Merged)
+                true
             }
         }
         Entry::Vacant(entry) => {
             entry.insert(flags);
-            Some(MergeResult::Inserted)
+            true
         }
     }
 }
@@ -279,7 +274,7 @@ enum Retention {
 
 #[derive(Debug)]
 pub struct Matcher<'a> {
-    machine: &'a Pattern,
+    pattern: &'a Pattern,
     trie: &'a Trie<TrieEntry>,
     states: StateSet,
     old_states: StateSet, // Reuse memory
@@ -292,12 +287,12 @@ pub struct Matcher<'a> {
 
 impl<'a> Matcher<'a> {
     pub fn new(
-        machine: &'a Pattern,
+        pattern: &'a Pattern,
         trie: &'a Trie<TrieEntry>,
         states: Option<Vec<StateId>>,
     ) -> Self {
         let mut s =
-            StateSet::with_capacity_and_hasher(machine.states.len(), FnvBuildHasher::new());
+            StateSet::with_capacity_and_hasher(pattern.states.len(), FnvBuildHasher::new());
         if let Some(states) = states {
             for state in states {
                 let key = StateKey {
@@ -309,18 +304,18 @@ impl<'a> Matcher<'a> {
             }
         } else {
             let initial = StateKey {
-                pattern: machine.initial(),
+                pattern: pattern.initial(),
                 trie: trie.root(),
                 next_component: false,
             };
             s.insert(initial, Default::default());
         }
         Self {
-            machine,
+            pattern,
             trie,
             states: s,
             old_states: StateSet::with_capacity_and_hasher(
-                machine.states.len(),
+                pattern.states.len(),
                 FnvBuildHasher::new(),
             ),
             queue: Vec::new(),
@@ -329,30 +324,18 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> Option<MergeResult> {
+    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> bool {
         merge_state(&mut self.states, state, flags)
     }
 
-    /// Follows epsilon transitions (incl. NextComponent) until all states are
-    /// at frontier.
-    fn expand_epsilon(&mut self) {
-        self.queue.extend(self.states.drain());
-        while let Some((key, flags)) = self.queue.pop() {
-            let state = ExpandedState::raise(&self.machine, &self.trie, key, flags);
-            let Some(merged) = merge_state(&mut self.states, key, flags) else { continue };
-
-            for successor in state.expand_epsilon() {
-                self.queue.push(successor.lower());
-            }
-
-            // Don't insert duplicates
-            if merged == MergeResult::Merged { continue; }
-
+    fn record_matches(&mut self) {
+        for (&key, &flags) in self.states.iter() {
             if let Some(e) = self.trie.get_value(key.trie) {
+                let state = ExpandedState::raise(&self.pattern, &self.trie, key, flags);
                 let output = Output {
                     state: key.pattern,
                     index: e.index as usize,
-                    is_literal: flags.contains(StateFlags::IS_LITERAL),
+                    is_literal: state.is_literal(),
                 };
                 if state.is_match() {
                     self.full.push(output);
@@ -361,9 +344,28 @@ impl<'a> Matcher<'a> {
                 }
             }
         }
+    }
 
+    /// Follows epsilon transitions (incl. NextComponent) until all states are
+    /// at frontier.
+    fn expand_epsilon(&mut self) {
+        self.queue.extend(self.states.iter().map(|(&k, &v)| (k, v)));
+        while let Some((key, flags)) = self.queue.pop() {
+            let state = ExpandedState::raise(&self.pattern, &self.trie, key, flags);
+            for successor in state.expand_epsilon() {
+                let (key, flags) = successor.lower();
+                if merge_state(&mut self.states, key, flags) {
+                    self.queue.push(successor.lower());
+                }
+            }
+        }
+
+        self.record_matches();
+
+        // Filter out useless states
+        // XXX: I think we can just delete this line?
         self.states.retain(|key, flags| {
-            ExpandedState::raise(&self.machine, &self.trie, *key, *flags).is_epsilon_frontier()
+            ExpandedState::raise(&self.pattern, &self.trie, *key, *flags).is_epsilon_frontier()
         });
     }
 
@@ -371,17 +373,10 @@ impl<'a> Matcher<'a> {
         std::mem::swap(&mut self.old_states, &mut self.states);
         self.states.clear();
         for (&src_key, &src_flags) in self.old_states.iter() {
-            let s = ExpandedState::raise(&self.machine, &self.trie, src_key, src_flags);
+            let s = ExpandedState::raise(&self.pattern, &self.trie, src_key, src_flags);
             for successor in s.expand() {
                 let (key, flags) = successor.lower();
-                let merge = merge_state(&mut self.states, key, flags);
-                if merge == Some(MergeResult::Inserted) && successor.is_match() {
-                    self.full.push(Output {
-                        state: key.pattern,
-                        index: successor.trie_entry().unwrap().index as usize,
-                        is_literal: flags.contains(StateFlags::IS_LITERAL),
-                    });
-                }
+                merge_state(&mut self.states, key, flags);
             }
         }
     }
@@ -391,7 +386,7 @@ impl<'a> Matcher<'a> {
         let mut out = String::new();
         let _ = write!(out, "[");
         for (i, (key, flags)) in self.states.iter().enumerate() {
-            let state = ExpandedState::raise(self.machine, self.trie, *key, *flags);
+            let state = ExpandedState::raise(self.pattern, self.trie, *key, *flags);
             if i > 0 {
                 let _ = write!(out, ", ");
             }
@@ -418,7 +413,7 @@ impl<'a> Matcher<'a> {
 
     // Runs until full trie has been consumed, or no more live states remain.
     pub fn run(&mut self) {
-        test_log!("{:?}", self.machine.states);
+        test_log!("{:?}", self.pattern.states);
         test_log!("{:?}", self.trie.nodes);
         while !self.states.is_empty() {
             self.step();
@@ -435,10 +430,10 @@ impl<'a> Matcher<'a> {
 }
 
 fn match_trie<'m, 't>(
-    machine: &'m Pattern,
+    pattern: &'m Pattern,
     trie: &'t Trie<TrieEntry>,
 ) -> Vec<Output> {
-    let mut matcher = Matcher::new(machine, trie, None);
+    let mut matcher = Matcher::new(pattern, trie, None);
     matcher.run();
     matcher.full
 }
