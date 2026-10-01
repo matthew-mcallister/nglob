@@ -103,6 +103,42 @@ impl Walker {
         Ok(dir_entries)
     }
 
+    /// Records matched files/directories and returns recursive states.
+    fn match_entries(
+        &mut self,
+        cur_dir: &Path,
+        states: Option<Vec<StateId>>,
+        entries: &mut Vec<WalkerEntry>,
+    ) -> Vec<Vec<StateId>> {
+        test_log!("entries: {:?}", entries);
+        let mut trie = build_trie(&entries);
+        add_special_entries(entries, &mut trie);
+
+        let mut matcher = Matcher::new(&self.pattern, &trie, states);
+        matcher.run();
+
+        test_log!("matches: {:?}", matcher.full.iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
+        for m in matcher.full {
+            let entry = &entries[m.index as usize];
+            let mut full_path = cur_dir.join(&entry.name[..]);
+            if entry.file_type == FileType::Directory {
+                full_path = full_path.join("");
+            }
+            self.out.push(Ok(Entry {
+                path: full_path.to_str().unwrap().to_owned(),
+                file_type: entry.file_type,
+            }))
+        }
+
+        test_log!("recurse: {:?}", matcher.recurse.iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
+        let mut recurse: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
+        for m in matcher.recurse {
+            recurse[m.index as usize].push(m.state);
+        }
+
+        recurse
+    }
+
     fn visit_dir(
         &mut self,
         cur_dir: &Path,
@@ -112,28 +148,7 @@ impl Walker {
         test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
 
         let mut entries = self.read_dir(cur_dir, recursion_depth)?;
-        test_log!("entries: {:?}", entries);
-        let mut trie = build_trie(&entries);
-        add_special_entries(&mut entries, &mut trie);
-
-        let mut matcher = Matcher::new(&self.pattern, &trie, states);
-        matcher.run();
-
-        test_log!("matches: {:?}", matcher.full().into_iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
-        for m in matcher.full() {
-            let entry = &entries[m.index as usize];
-            let full_path = cur_dir.join(&entry.name[..]);
-            self.out.push(Ok(Entry {
-                path: full_path.to_str().unwrap().to_owned(),
-                file_type: entry.file_type,
-            }))
-        }
-
-        test_log!("recurse: {:?}", matcher.recurse().into_iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
-        let mut recurse: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
-        for m in matcher.recurse() {
-            recurse[m.index as usize].push(m.state);
-        }
+        let recurse = self.match_entries(cur_dir, states, &mut entries);
 
         // Descend
         for (i, states) in recurse.into_iter().enumerate() {
@@ -200,10 +215,10 @@ mod tests {
 
     use crate::testing::create_test_files;
 
-    fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
+    fn glob_with_config(config: GlobConfig, pattern: &str, files: &[&str]) -> Vec<String> {
         let dir = create_test_files(files);
         let full = format!("{}/{}", dir.path().display(), pattern);
-        let result = glob(GlobConfig::default(), Pattern::compile(&full).unwrap());
+        let result = glob(config, Pattern::compile(&full).unwrap());
         let prefix = format!("{}/", dir.path().display());
         if let Some(e) = result.errors().next() {
             panic!("{}", e);
@@ -216,6 +231,10 @@ mod tests {
         paths
     }
 
+    fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
+        glob_with_config(Default::default(), pattern, files)
+    }
+
     #[test]
     fn literal_name() {
         assert_eq!(
@@ -225,15 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn star_matches_within_component() {
-        assert_eq!(
-            glob_files("*.txt", &["foo.txt", "bar.txt", "baz.rs"]),
-            ["bar.txt", "foo.txt"]
-        );
-    }
-
-    #[test]
-    fn question_matches_one_char() {
+    fn question() {
         assert_eq!(
             glob_files("?.txt", &["a.txt", "ab.txt"]),
             ["a.txt"]
@@ -249,18 +260,11 @@ mod tests {
     }
 
     #[test]
-    fn starstar_recurses() {
+    fn star() {
         assert_eq!(
-            glob_files(
-                "**/*.rs",
-                &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
-            ),
-            ["main.rs", "src/lib.rs", "src/sub/mod.rs"]
+            glob_files("*.txt", &["foo.txt", "bar.txt", "baz.rs"]),
+            ["bar.txt", "foo.txt"]
         );
-    }
-
-    #[test]
-    fn star_does_not_cross_separator() {
         assert_eq!(
             glob_files(
                 "src/*.rs",
@@ -268,13 +272,35 @@ mod tests {
             ),
             ["src/lib.rs", "src/main.rs"]
         );
-    }
-
-    #[test]
-    fn escaped_star_is_literal() {
+        // Escaped star handled correctly
         assert_eq!(
             glob_files(r"a\*b.txt", &["a*b.txt", "aXb.txt"]),
             ["a*b.txt"]
+        );
+    }
+
+    #[test]
+    fn starstar() {
+        assert_eq!(
+            glob_files(
+                "**/*.rs",
+                &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
+            ),
+            ["main.rs", "src/lib.rs", "src/sub/mod.rs"]
+        );
+        assert_eq!(
+            glob_files(
+                "asdf/**",
+                &["asdf/blorb.txt"]
+            ),
+            ["asdf/", "asdf/blorb.txt"]
+        );
+        assert_eq!(
+            glob_files(
+                "asdf",
+                &["asdf/blorb.txt"]
+            ),
+            ["asdf/"]
         );
     }
 }

@@ -304,9 +304,9 @@ pub struct Matcher<'a> {
     old_states: StateSet, // Reuse memory
     queue: Vec<(StateKey, StateFlags)>, // Reuse memory
     // States that matched a path component but aren't full matches
-    recurse: Vec<Output>,
+    pub(crate) recurse: Vec<Output>,
     // Full matches
-    full: Vec<Output>,
+    pub(crate) full: Vec<Output>,
 }
 
 impl<'a> Matcher<'a> {
@@ -441,14 +441,6 @@ impl<'a> Matcher<'a> {
         while !self.states.is_empty() {
             self.step();
         }
-    }
-
-    pub fn recurse(&self) -> impl Iterator<Item = Output> + '_ {
-        self.recurse.iter().copied()
-    }
-
-    pub fn full(&self) -> &[Output] {
-        &self.full
     }
 }
 
