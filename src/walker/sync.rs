@@ -120,6 +120,9 @@ impl Walker {
         test_log!("matches: {:?}", matcher.full.iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
         for m in matcher.full {
             let entry = &entries[m.index as usize];
+            if !self.config.should_match(entry.file_type) {
+                continue;
+            }
             let mut full_path = cur_dir.join(&entry.name[..]);
             if entry.file_type == FileType::Directory {
                 full_path = full_path.join("");
@@ -301,6 +304,34 @@ mod tests {
                 &["asdf/blorb.txt"]
             ),
             ["asdf/"]
+        );
+    }
+
+    #[test]
+    fn match_filter() {
+        assert_eq!(
+            glob_with_config(
+                GlobConfig {
+                    match_files: false,
+                    match_directories: true,
+                    ..Default::default()
+                },
+                "**",
+                &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
+            ),
+            ["", "src/", "src/sub/"]
+        );
+        assert_eq!(
+            glob_with_config(
+                GlobConfig {
+                    match_files: true,
+                    match_directories: false,
+                    ..Default::default()
+                },
+                "**",
+                &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
+            ),
+            ["README.md", "main.rs", "src/lib.rs", "src/sub/mod.rs"]
         );
     }
 }
