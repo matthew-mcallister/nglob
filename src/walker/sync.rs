@@ -2,11 +2,8 @@ use std::fs::DirEntry;
 use std::io::Result;
 use std::path::Path;
 
-use fnv::FnvHashMap;
-
 use crate::matcher::{Matcher, TrieEntry};
 use crate::nfa::{Pattern, StateId};
-use crate::pattern::ParsedPattern;
 use crate::{SmallString, test_log};
 use crate::trie::Trie;
 use crate::walker::{Entry, FileType, GlobConfig};
@@ -122,6 +119,7 @@ impl Walker {
         let mut matcher = Matcher::new(&self.pattern, &trie, states);
         matcher.run();
 
+        test_log!("matches: {:?}", matcher.full().into_iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
         for m in matcher.full() {
             let entry = &entries[m.index as usize];
             let full_path = cur_dir.join(&entry.name[..]);
@@ -131,6 +129,7 @@ impl Walker {
             }))
         }
 
+        test_log!("recurse: {:?}", matcher.recurse().into_iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
         let mut recurse: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
         for m in matcher.recurse() {
             recurse[m.index as usize].push(m.state);
@@ -233,7 +232,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn question_matches_one_char() {
         assert_eq!(
@@ -250,7 +248,6 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
     fn starstar_recurses() {
         assert_eq!(

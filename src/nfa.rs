@@ -4,7 +4,7 @@ use std::ops::Index;
 use smallvec::SmallVec;
 
 use crate::pattern::{Ast, ParseError, is_escape_char, parse};
-use crate::SmallString;
+use crate::{SmallString, test_log};
 
 pub type StateId = u16;
 
@@ -16,6 +16,10 @@ pub enum TransitionRule {
     WildEpsilon,
     /// Edge from end of current path component to beginning of next
     NextComponent,
+    /// Non-literal component ender
+    // TODO: Maybe make is_literal a property on Transition instead of
+    // duplicating rules
+    WildNextComponent,
     /// Plain char
     Char(char),
     /// Matches any character (used by ?, *, **)
@@ -63,6 +67,13 @@ impl Transition {
         }
     }
 
+    pub fn wild_next_component(next: StateId) -> Self {
+        Self {
+            next,
+            rule: TransitionRule::WildNextComponent,
+        }
+    }
+
     pub fn wildcard(next: StateId) -> Self {
         Self {
             next,
@@ -86,7 +97,8 @@ impl State {
                 | TransitionRule::WildEpsilon => write!(out, "ε"),
                 TransitionRule::Char(c) if is_escape_char(c) => write!(out, "\\{c}"),
                 TransitionRule::Char(c) => write!(out, "{c}"),
-                TransitionRule::NextComponent => write!(out, "{}", std::path::MAIN_SEPARATOR),
+                TransitionRule::NextComponent
+                | TransitionRule::WildNextComponent => write!(out, "{}", std::path::MAIN_SEPARATOR),
                 TransitionRule::Wildcard => write!(out, "?"),
             };
         }
@@ -135,13 +147,20 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
             sm.connect(loop_state, Transition::wildcard(loop_state));
         }
         Ast::StarStar => {
+            // Branch 1: matches one or more components
             let loop_state = sm.new_state();
-            sm.connect(initial, Transition::epsilon(loop_state));
+            sm.connect(initial, Transition::wild_epsilon(loop_state));
             sm.connect(loop_state, Transition::wild_epsilon(terminal));
             sm.connect(loop_state, Transition::wildcard(loop_state));
-            sm.connect(loop_state, Transition::next_component(loop_state));
+            sm.connect(loop_state, Transition::wild_next_component(loop_state));
+
+            // Branch 2: matches zero components
+            let skip_state = sm.new_state();
+            sm.connect(initial, Transition::epsilon(skip_state));
+            sm.connect(skip_state, Transition::next_component(terminal));
         }
         Ast::Sequence(nodes) => {
+            assert!(!nodes.is_empty());
             let mut initial = initial;
             for (i, node) in nodes.iter().enumerate() {
                 let terminal = if i + 1 == nodes.len() {
@@ -186,6 +205,10 @@ impl Pattern {
             source: source.into(),
             states: builder.states,
         })
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     #[cfg(test)]
@@ -255,9 +278,11 @@ mod tests {
         assert_eq!(p.between(2, 1), vec![WildEpsilon]);
 
         let p = machine("**");
-        assert_eq!(p.between(0, 2), vec![Epsilon]);
-        assert_eq!(p.between(2, 2), vec![Wildcard, NextComponent]);
+        assert_eq!(p.between(0, 2), vec![WildEpsilon]);
+        assert_eq!(p.between(2, 2), vec![Wildcard, WildNextComponent]);
         assert_eq!(p.between(2, 1), vec![WildEpsilon]);
+        assert_eq!(p.between(0, 3), vec![Epsilon]);
+        assert_eq!(p.between(3, 1), vec![NextComponent]);
 
         let p = machine("a?c");
         assert_eq!(p.between(0, 2), vec![Char('a')]);

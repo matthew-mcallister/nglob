@@ -163,6 +163,19 @@ impl<'a> ExpandedState<'a> {
         }
     }
 
+    fn is_recurse(&self) -> bool {
+        if self.flags.next_component
+            && self.is_epsilon_frontier()
+            && let Some(entry) = self.trie_entry()
+            && entry.is_dir
+            && (!entry.is_literal || self.is_literal())
+        {
+            true
+        } else {
+            false
+        }
+    }
+
     fn is_literal(&self) -> bool {
         self.flags.is_literal
     }
@@ -170,11 +183,18 @@ impl<'a> ExpandedState<'a> {
     /// State has any transitions which are not epsilons
     fn is_epsilon_frontier(&self) -> bool {
         if self.flags.next_component {
+            // FIXME: Precompute
             self.pattern_node()
                 .transitions
                 .iter()
-                .any(|t| !matches!(t.rule, TransitionRule::Epsilon | TransitionRule::NextComponent))
+                .any(|t| !matches!(
+                    t.rule,
+                    TransitionRule::Epsilon
+                        | TransitionRule::NextComponent
+                        | TransitionRule::WildNextComponent,
+                ))
         } else {
+            // FIXME: Precompute
             self.pattern_node()
                 .transitions
                 .iter()
@@ -182,7 +202,8 @@ impl<'a> ExpandedState<'a> {
                     t.rule,
                     TransitionRule::Epsilon
                         | TransitionRule::WildEpsilon
-                        | TransitionRule::NextComponent,
+                        | TransitionRule::NextComponent
+                        | TransitionRule::WildNextComponent,
                 ))
         }
     }
@@ -196,7 +217,8 @@ impl<'a> ExpandedState<'a> {
             // Epsilon
             TransitionRule::Epsilon
             | TransitionRule::WildEpsilon
-            | TransitionRule::NextComponent => None,
+            | TransitionRule::NextComponent
+            | TransitionRule::WildNextComponent => None,
         }
     }
 
@@ -208,6 +230,9 @@ impl<'a> ExpandedState<'a> {
             TransitionRule::WildEpsilon => Some(self.flags.with_literal(false)),
             TransitionRule::NextComponent if self.is_dir() => Some(self.flags.with_next_component(true)),
             TransitionRule::NextComponent => None,
+            // This prevents ** from matching zero components recursively
+            TransitionRule::WildNextComponent if self.is_dir() => Some(self.flags.with_next_component(true).with_literal(false)),
+            TransitionRule::WildNextComponent => None,
             // Non-epsilon
             TransitionRule::Char(_) | TransitionRule::Wildcard => None,
         }
@@ -262,7 +287,6 @@ impl<'a> ExpandedState<'a> {
 pub struct Output {
     pub state: StateId,
     pub index: usize,
-    pub is_literal: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,11 +359,10 @@ impl<'a> Matcher<'a> {
                 let output = Output {
                     state: key.pattern,
                     index: e.index as usize,
-                    is_literal: state.is_literal(),
                 };
                 if state.is_match() {
                     self.full.push(output);
-                } else if state.is_epsilon_frontier() && state.flags.next_component {
+                } else if state.is_recurse() {
                     self.recurse.push(output);
                 }
             }
@@ -397,7 +420,7 @@ impl<'a> Matcher<'a> {
                 state.trie_node().show_accepts(),
                 state.pattern_id,
                 state.pattern_node().show_accepts(),
-                if flags.contains(StateFlags::IS_LITERAL) { " lit" } else { "" },
+                if state.flags.is_literal { " lit" } else { "" },
             );
         }
         let _ = write!(out, "]");
@@ -459,6 +482,13 @@ mod tests {
         matches.into_iter().map(|Output { index, .. }| targets[index]).collect()
     }
 
+    fn matches_literal(pattern: &str, target: &str) -> bool {
+        let mut trie = Trie::new();
+        trie.insert(target, TrieEntry { index: 0, is_dir: false, is_literal: true });
+        let pattern = Pattern::compile_without_base(pattern).unwrap();
+        !match_trie(&pattern, &trie).is_empty()
+    }
+
     #[test]
     fn test_matches() {
         assert!(matches("", ""));
@@ -486,5 +516,23 @@ mod tests {
         assert!(matches("a*f", "af"));
         assert!(!matches("a*f", "asd"));
         assert!(!matches("a*f", "asdc"));
+    }
+
+    #[test]
+    fn test_match_all() {
+        assert_eq!(match_all("ab?b", &["abab", "aaab"]), vec!["abab"]);
+        assert_eq!(match_all("a?ab", &["abab", "aaab"]), vec!["abab", "aaab"]);
+    }
+
+    #[test]
+    fn test_match_literal() {
+        assert!(matches_literal("", ""));
+        assert!(matches_literal("{}", ""));
+        assert!(matches_literal("..", ".."));
+        assert!(matches_literal("{*,..}", ".."));
+        assert!(matches("*", "") && !matches_literal("*", ""));
+        assert!(matches("*", "..") && !matches_literal("*", ".."));
+        assert!(matches("**", "") && !matches_literal("**", ""));
+        assert!(matches("**", "..") && !matches_literal("**", ".."));
     }
 }
