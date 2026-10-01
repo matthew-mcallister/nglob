@@ -20,9 +20,13 @@ impl From<std::fs::FileType> for FileType {
     }
 }
 
+/// A file or discovery matched by a glob pattern.
 #[derive(Debug)]
 pub struct Entry {
+   /// Path to the discovered file or directory. Directories will have a
+   /// trailing '/' appended ('\' on Windows).
    pub path: String,
+   /// Type of the matched file or directory.
    pub file_type: FileType,
 }
 

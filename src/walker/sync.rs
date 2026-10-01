@@ -14,10 +14,17 @@ struct WalkerEntry {
     name: SmallString,
 }
 
-impl TryFrom<DirEntry> for WalkerEntry {
-    type Error = std::io::Error;
+fn get_file_type(entry: &DirEntry) -> Result<FileType> {
+    let file_type = entry.file_type()?;
+    if file_type.is_symlink() {
+        Ok(entry.path().metadata()?.file_type().into())
+    } else {
+        Ok(file_type.into())
+    }
+}
 
-    fn try_from(entry: std::fs::DirEntry) -> Result<Self> {
+impl WalkerEntry {
+    fn from_dir_entry(entry: DirEntry, follow_symlinks: bool) -> Result<Self> {
         let name: SmallString = entry.path()
             .file_name()
             .unwrap()
@@ -28,7 +35,11 @@ impl TryFrom<DirEntry> for WalkerEntry {
                 std::io::Error::new(kind, message)
             })?
             .into();
-        let file_type = entry.file_type()?.into();
+        let file_type = if follow_symlinks {
+            get_file_type(&entry)?
+        } else {
+            entry.file_type()?.into()
+        };
         Ok(Self { name, file_type })
     }
 }
@@ -91,10 +102,10 @@ impl Walker {
             ));
         }
 
+        let follow_symlinks = self.config.follow_symlinks;
         let mut dir_entries = Vec::new();
         for entry in std::fs::read_dir(cur_dir)? {
-            // TODO: Follow symlinks
-            match entry.and_then(WalkerEntry::try_from) {
+            match entry.and_then(|e| WalkerEntry::from_dir_entry(e, follow_symlinks)) {
                 Ok(entry) => dir_entries.push(entry),
                 Err(err) => self.out.push(Err(err)),
             }
@@ -367,6 +378,46 @@ mod tests {
                 dir.path(),
             ),
             ["main.rs"],
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinks() {
+        let dir = create_test_files(&["file.txt", "sub/real.txt"]);
+        std::os::unix::fs::symlink(dir.path().join("file.txt"), dir.path().join("link_file")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("sub"), dir.path().join("link_dir")).unwrap();
+
+        assert_eq!(
+            glob_with_dir(
+                GlobConfig {
+                    match_files: false,
+                    match_directories: false,
+                    match_other: true,
+                    follow_symlinks: false,
+                    ..Default::default()
+                },
+                "**",
+                dir.path(),
+            ),
+            ["link_dir", "link_file"],
+        );
+        assert_eq!(
+            glob_with_dir(
+                GlobConfig {
+                    match_other: false,
+                    follow_symlinks: false,
+                    ..Default::default()
+                },
+                "**",
+                dir.path(),
+            ),
+            ["", "file.txt", "sub/", "sub/real.txt"],
+        );
+
+        assert_eq!(
+            glob_with_dir(Default::default(), "**", dir.path()),
+            ["", "file.txt", "link_dir/", "link_dir/real.txt", "link_file", "sub/", "sub/real.txt"],
         );
     }
 }
