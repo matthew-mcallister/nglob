@@ -218,11 +218,10 @@ mod tests {
 
     use crate::testing::create_test_files;
 
-    fn glob_with_config(config: GlobConfig, pattern: &str, files: &[&str]) -> Vec<String> {
-        let dir = create_test_files(files);
-        let full = format!("{}/{}", dir.path().display(), pattern);
+    fn glob_with_dir(config: GlobConfig, pattern: &str, dir: &Path) -> Vec<String> {
+        let full = format!("{}/{}", dir.display(), pattern);
         let result = glob(config, Pattern::compile(&full).unwrap());
-        let prefix = format!("{}/", dir.path().display());
+        let prefix = format!("{}/", dir.display());
         if let Some(e) = result.errors().next() {
             panic!("{}", e);
         }
@@ -234,6 +233,11 @@ mod tests {
         paths
     }
 
+    fn glob_with_config(config: GlobConfig, pattern: &str, files: &[&str]) -> Vec<String> {
+        let dir = create_test_files(files);
+        glob_with_dir(config, pattern, dir.path())
+    }
+
     fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
         glob_with_config(Default::default(), pattern, files)
     }
@@ -242,7 +246,7 @@ mod tests {
     fn literal_name() {
         assert_eq!(
             glob_files("foo.txt", &["foo.txt", "bar.txt"]),
-            ["foo.txt"]
+            ["foo.txt"],
         );
     }
 
@@ -250,7 +254,7 @@ mod tests {
     fn question() {
         assert_eq!(
             glob_files("?.txt", &["a.txt", "ab.txt"]),
-            ["a.txt"]
+            ["a.txt"],
         );
     }
 
@@ -258,7 +262,7 @@ mod tests {
     fn alternatives() {
         assert_eq!(
             glob_files("{cat,dog}.txt", &["cat.txt", "dog.txt", "bird.txt"]),
-            ["cat.txt", "dog.txt"]
+            ["cat.txt", "dog.txt"],
         );
     }
 
@@ -266,19 +270,19 @@ mod tests {
     fn star() {
         assert_eq!(
             glob_files("*.txt", &["foo.txt", "bar.txt", "baz.rs"]),
-            ["bar.txt", "foo.txt"]
+            ["bar.txt", "foo.txt"],
         );
         assert_eq!(
             glob_files(
                 "src/*.rs",
                 &["src/main.rs", "src/lib.rs", "src/sub/mod.rs"]
             ),
-            ["src/lib.rs", "src/main.rs"]
+            ["src/lib.rs", "src/main.rs"],
         );
         // Escaped star handled correctly
         assert_eq!(
             glob_files(r"a\*b.txt", &["a*b.txt", "aXb.txt"]),
-            ["a*b.txt"]
+            ["a*b.txt"],
         );
     }
 
@@ -289,21 +293,21 @@ mod tests {
                 "**/*.rs",
                 &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
             ),
-            ["main.rs", "src/lib.rs", "src/sub/mod.rs"]
+            ["main.rs", "src/lib.rs", "src/sub/mod.rs"],
         );
         assert_eq!(
             glob_files(
                 "asdf/**",
                 &["asdf/blorb.txt"]
             ),
-            ["asdf/", "asdf/blorb.txt"]
+            ["asdf/", "asdf/blorb.txt"],
         );
         assert_eq!(
             glob_files(
                 "asdf",
                 &["asdf/blorb.txt"]
             ),
-            ["asdf/"]
+            ["asdf/"],
         );
     }
 
@@ -319,7 +323,7 @@ mod tests {
                 "**",
                 &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
             ),
-            ["", "src/", "src/sub/"]
+            ["", "src/", "src/sub/"],
         );
         assert_eq!(
             glob_with_config(
@@ -331,7 +335,38 @@ mod tests {
                 "**",
                 &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
             ),
-            ["README.md", "main.rs", "src/lib.rs", "src/sub/mod.rs"]
+            ["README.md", "main.rs", "src/lib.rs", "src/sub/mod.rs"],
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn match_other() {
+        let dir = create_test_files(&["main.rs"]);
+        let _socket = std::os::unix::net::UnixListener::bind(dir.path().join("sock")).unwrap();
+        assert_eq!(
+            glob_with_dir(
+                GlobConfig {
+                    match_files: false,
+                    match_other: true,
+                    ..Default::default()
+                },
+                "*",
+                dir.path(),
+            ),
+            ["sock"],
+        );
+        assert_eq!(
+            glob_with_dir(
+                GlobConfig {
+                    match_files: true,
+                    match_other: false,
+                    ..Default::default()
+                },
+                "*",
+                dir.path(),
+            ),
+            ["main.rs"],
         );
     }
 }
