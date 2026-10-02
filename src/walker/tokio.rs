@@ -6,7 +6,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::FileType;
+use crate::{FileType, GlobResult};
 use crate::nfa::{Pattern, StateId};
 use crate::test_log;
 use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
@@ -99,26 +99,6 @@ impl TokioWalker {
     }
 }
 
-#[derive(Debug)]
-pub struct GlobResult {
-    results: Vec<Result<Entry>>,
-    _private: (),
-}
-
-impl GlobResult {
-    pub fn results(&self) -> &[Result<Entry>] {
-        &self.results
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = &Entry> + '_ {
-        self.results.iter().filter_map(|r| r.as_ref().ok())
-    }
-
-    pub fn errors(&self) -> impl Iterator<Item = &std::io::Error> + '_ {
-        self.results.iter().filter_map(|r| r.as_ref().err())
-    }
-}
-
 pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
     let walker = Walker {
@@ -141,7 +121,6 @@ pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
 
     GlobResult {
         results,
-        _private: (),
     }
 }
 

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::nfa::{Pattern, StateId};
-use crate::test_log;
+use crate::{GlobResult, test_log};
 use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
 
 #[derive(Debug)]
@@ -73,26 +73,6 @@ impl SyncWalker {
     }
 }
 
-#[derive(Debug)]
-pub struct GlobResult {
-    results: Vec<Result<Entry>>,
-    _private: (),
-}
-
-impl GlobResult {
-    pub fn results(&self) -> &[Result<Entry>] {
-        &self.results
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = &Entry> + '_ {
-        self.results.iter().filter_map(|r| r.as_ref().ok())
-    }
-
-    pub fn errors(&self) -> impl Iterator<Item = &std::io::Error> + '_ {
-        self.results.iter().filter_map(|r| r.as_ref().err())
-    }
-}
-
 pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let walker = Walker {
         config: Arc::new(config),
@@ -105,7 +85,6 @@ pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     walker.walk();
     GlobResult {
         results: walker.inner.out,
-        _private: (),
     }
 }
 

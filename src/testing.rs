@@ -2,7 +2,7 @@ use std::fs;
 
 use tempfile::TempDir;
 
-pub fn create_test_files(paths: &[&str]) -> TempDir {
+pub(crate) fn create_test_files(paths: &[&str]) -> TempDir {
     let dir = TempDir::new().unwrap();
     for path in paths {
         let full = dir.path().join(path);

@@ -3,11 +3,11 @@ use std::iter::{FusedIterator, Once};
 
 use fnv::FnvHashMap;
 
-pub type TrieId = u32;
-pub type Char = char;
+pub(crate) type TrieId = u32;
+pub(crate) type Char = char;
 
 #[derive(Debug)]
-pub struct TrieNode {
+pub(crate) struct TrieNode {
     children: Children,
 }
 
@@ -19,7 +19,7 @@ impl Default for TrieNode {
 
 impl TrieNode {
     // Debug code
-    pub fn show_accepts(&self) -> String {
+    pub(crate) fn show_accepts(&self) -> String {
         fn write_escaped(w: &mut impl std::fmt::Write, c: char) {
             if c == '"' {
                 let _ = write!(w, "\\\"");
@@ -78,7 +78,7 @@ impl Children {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (Char, TrieId)> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Char, TrieId)> + '_ {
         #[derive(Debug)]
         enum Iter<'a> {
             Empty,
@@ -118,9 +118,9 @@ impl Children {
 }
 
 #[derive(Debug)]
-pub struct Trie<T> {
-    pub nodes: Vec<TrieNode>,
-    pub values: FnvHashMap<TrieId, T>,
+pub(crate) struct Trie<T> {
+    pub(crate) nodes: Vec<TrieNode>,
+    pub(crate) values: FnvHashMap<TrieId, T>,
 }
 
 impl<T> Default for Trie<T> {
@@ -130,7 +130,7 @@ impl<T> Default for Trie<T> {
 }
 
 impl<T> Trie<T> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             nodes: vec![
                 TrieNode {
@@ -141,11 +141,11 @@ impl<T> Trie<T> {
         }
     }
 
-    pub fn root(&self) -> TrieId {
+    pub(crate) fn root(&self) -> TrieId {
         0
     }
 
-    pub fn insert(&mut self, key: &str, value: T) {
+    pub(crate) fn insert(&mut self, key: &str, value: T) {
         let mut cur: usize = 0;
         for ch in key.chars() {
             if let Some(next) = self.nodes[cur].children.get(ch) {
@@ -161,7 +161,7 @@ impl<T> Trie<T> {
     }
 
     // Useful for testing
-    pub fn get_key(&self, key: &str) -> Option<&T> {
+    pub(crate) fn get_key(&self, key: &str) -> Option<&T> {
         let mut cur: usize = 0;
         for ch in key.chars() {
             let next = self.nodes[cur].children.get(ch)?;
@@ -170,15 +170,15 @@ impl<T> Trie<T> {
         self.values.get(&(cur as TrieId))
     }
 
-    pub fn get(&self, id: TrieId) -> Option<&TrieNode> {
+    pub(crate) fn get(&self, id: TrieId) -> Option<&TrieNode> {
         self.nodes.get(id as usize)
     }
 
-    pub fn get_value(&self, id: TrieId) -> Option<&T> {
+    pub(crate) fn get_value(&self, id: TrieId) -> Option<&T> {
         self.values.get(&id)
     }
 
-    pub fn children(&self, id: TrieId) -> impl Iterator<Item = (Char, TrieId)> + '_ {
+    pub(crate) fn children(&self, id: TrieId) -> impl Iterator<Item = (Char, TrieId)> + '_ {
         self.nodes[id as usize].children.iter()
     }
 }

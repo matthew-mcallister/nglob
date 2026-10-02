@@ -2,10 +2,13 @@ mod nfa;
 mod pattern;
 mod matcher;
 mod trie;
-mod walker;
+pub mod walker;
 
 #[cfg(test)]
 mod testing;
+
+pub use crate::nfa::Pattern;
+pub use crate::pattern::ParseError;
 
 #[cfg(test)]
 macro_rules! test_log {
@@ -23,6 +26,7 @@ pub(crate) use test_log;
 
 pub(crate) type SmallString = smallstr::SmallString<[u8; 23]>;
 
+/// Inferred file type for filtering purposes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum FileType {
    File,

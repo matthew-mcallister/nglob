@@ -8,21 +8,21 @@ use crate::test_log;
 use crate::trie::{Trie, TrieId, TrieNode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TrieEntry {
-    pub index: u32,
-    pub is_dir: bool,
+pub(crate) struct TrieEntry {
+    pub(crate) index: u32,
+    pub(crate) is_dir: bool,
     /// If true, only literal patterns match. Used by ""/"."/".."
-    pub is_literal: bool,
+    pub(crate) is_literal: bool,
 }
 
 /// We store live states as StateKey + StateFlags, which is compact and merges
 /// states with different is_literal values, but for actual transition
 /// calculations we use the richer MatcherState type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct StateKey {
-    pub pattern: StateId,
-    pub trie: TrieId,
-    pub next_component: bool,
+pub(crate) struct StateKey {
+    pub(crate) pattern: StateId,
+    pub(crate) trie: TrieId,
+    pub(crate) next_component: bool,
 }
 
 impl std::fmt::Display for StateKey {
@@ -37,7 +37,7 @@ impl std::fmt::Display for StateKey {
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub struct StateFlags: u8 {
+    pub(crate) struct StateFlags: u8 {
         const IS_LITERAL = 1;
     }
 }
@@ -137,7 +137,7 @@ impl<'a> ExpandedState<'a> {
     }
 
     fn pattern_node(&self) -> &State {
-        &self.pattern[self.pattern_id]
+        self.pattern.get(self.pattern_id)
     }
 
     fn trie_node(&self) -> &TrieNode {
@@ -241,7 +241,11 @@ impl<'a> ExpandedState<'a> {
     /// Follows all state transitions along matching trie edges.
     fn expand(&self) -> impl Iterator<Item = Self> + '_ {
         self.trie.children(self.trie_id)
-            .flat_map(move |x| self.pattern[self.pattern_id].transitions.iter().map(move |t| (x, t)))
+            .flat_map(move |x|
+                self.pattern.get(self.pattern_id)
+                    .transitions.iter()
+                    .map(move |t| (x, t))
+            )
             .filter_map(move |((c, tr_id), t)| {
                 #[cfg(test)]
                 let (key, _) = self.lower();
@@ -262,7 +266,7 @@ impl<'a> ExpandedState<'a> {
     }
 
     fn expand_epsilon(&self) -> impl Iterator<Item = Self> + '_ {
-        self.pattern[self.pattern_id].transitions.iter()
+        self.pattern.get(self.pattern_id).transitions.iter()
             .filter_map(move |t| {
                 #[cfg(test)]
                 let (key, _) = self.lower();
@@ -284,9 +288,9 @@ impl<'a> ExpandedState<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Output {
-    pub state: StateId,
-    pub index: usize,
+pub(crate) struct Output {
+    pub(crate) state: StateId,
+    pub(crate) index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -297,7 +301,7 @@ enum Retention {
 }
 
 #[derive(Debug)]
-pub struct Matcher<'a> {
+pub(crate) struct Matcher<'a> {
     pattern: &'a Pattern,
     trie: &'a Trie<TrieEntry>,
     states: StateSet,
@@ -310,7 +314,7 @@ pub struct Matcher<'a> {
 }
 
 impl<'a> Matcher<'a> {
-    pub fn new(
+    pub(crate) fn new(
         pattern: &'a Pattern,
         trie: &'a Trie<TrieEntry>,
         states: Option<Vec<StateId>>,
@@ -435,7 +439,7 @@ impl<'a> Matcher<'a> {
     }
 
     // Runs until full trie has been consumed, or no more live states remain.
-    pub fn run(&mut self) {
+    pub(crate) fn run(&mut self) {
         test_log!("{:?}", self.pattern.states);
         test_log!("{:?}", self.trie.nodes);
         while !self.states.is_empty() {
