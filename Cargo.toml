@@ -17,5 +17,4 @@ tokio = { version = "^1.53.1", features = ["fs", "rt", "macros"] }
 tokio-stream = { version = "^0.1.19", features = ["fs"] }
 
 [features]
-default = ["tokio"]
 tokio = ["dep:tokio", "dep:tokio-stream"]
