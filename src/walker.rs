@@ -28,23 +28,27 @@ fn get_file_type(entry: &DirEntry) -> Result<FileType> {
 }
 
 impl WalkerEntry {
-   fn from_dir_entry(entry: DirEntry, follow_symlinks: bool) -> Result<Self> {
-      let name: SmallString = entry.path()
+   fn from_parts(path: &Path, file_type: FileType) -> Result<Self> {
+      let name: SmallString = path
          .file_name()
          .unwrap()
          .to_str()
          .ok_or_else(|| {
             let kind = std::io::ErrorKind::InvalidData;
-            let message = format!("filename contains invalid UTF-8: {}", entry.path().to_string_lossy());
+            let message = format!("filename contains invalid UTF-8: {}", path.to_string_lossy());
             std::io::Error::new(kind, message)
          })?
          .into();
+      Ok(Self { name, file_type })
+   }
+
+   fn from_dir_entry(entry: DirEntry, follow_symlinks: bool) -> Result<Self> {
       let file_type = if follow_symlinks {
          get_file_type(&entry)?
       } else {
          entry.file_type()?.into()
       };
-      Ok(Self { name, file_type })
+      Self::from_parts(&entry.path(), file_type)
    }
 }
 

@@ -6,7 +6,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use crate::FileType;
 use crate::nfa::{Pattern, StateId};
+use crate::test_log;
 use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
 
 #[derive(Debug)]
@@ -15,13 +17,48 @@ struct TokioWalker {
     sender: UnboundedSender<Vec<Result<Entry>>>,
 }
 
+async fn walker_entry(entry: tokio::fs::DirEntry, follow_symlinks: bool) -> Result<WalkerEntry> {
+    let file_type = entry.file_type().await?;
+    let file_type = if follow_symlinks && file_type.is_symlink() {
+        entry.metadata().await?.file_type().into()
+    } else {
+        FileType::from(file_type)
+    };
+    WalkerEntry::from_parts(&entry.path(), file_type)
+}
+
 impl TokioWalker {
+    fn flush(&mut self) {
+        if self.inner.out.is_empty() {
+            return;
+        }
+        let chunk = std::mem::take(&mut self.inner.out);
+        let _ = self.sender.send(chunk);
+    }
+
     async fn read_dir(
         &mut self,
         cur_dir: &Path,
         recursion_depth: usize,
     ) -> Result<Vec<WalkerEntry>> {
-        todo!()
+        if recursion_depth > self.inner.config.max_depth {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("{}: max recursion depth exceeded", cur_dir.display()),
+            ));
+        }
+
+        let follow_symlinks = self.inner.config.follow_symlinks;
+        let mut dir_entries = Vec::new();
+        let mut read_dir = tokio::fs::read_dir(cur_dir).await?;
+        while let Some(entry) = read_dir.next_entry().await? {
+            match walker_entry(entry, follow_symlinks).await {
+                Ok(entry) => dir_entries.push(entry),
+                Err(err) => self.inner.out.push(Err(err)),
+            }
+        }
+
+        Ok(dir_entries)
     }
 
     async fn visit_dir(
@@ -30,11 +67,35 @@ impl TokioWalker {
         recursion_depth: usize,
         states: Option<Vec<StateId>>,
     ) -> Result<()> {
-        todo!()
+        test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
+
+        let mut entries = self.read_dir(cur_dir, recursion_depth).await?;
+        let recurse = self.inner.match_entries(cur_dir, states, &mut entries);
+        self.flush();
+
+        for (i, states) in recurse.into_iter().enumerate() {
+            if states.is_empty() { continue; }
+            let dir = cur_dir.join(&entries[i].name[..]);
+            let res = Box::pin(self.visit_dir(
+                &dir,
+                recursion_depth + 1,
+                Some(states),
+            )).await;
+            if let Err(e) = res {
+                self.inner.out.push(Err(e));
+            }
+        }
+
+        Ok(())
     }
 
     async fn walk(&mut self) {
-        todo!()
+        let cur_dir = self.inner.pattern.base_path.to_owned();
+        let res = self.visit_dir(Path::new(&cur_dir[..]), 0, None).await;
+        if let Err(e) = res {
+            self.inner.out.push(Err(e));
+        }
+        self.flush();
     }
 }
 
@@ -70,6 +131,7 @@ pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
         sender,
     };
     walker.walk().await;
+    drop(walker);
 
     let mut recv = UnboundedReceiverStream::new(receiver);
     let mut results = Vec::new();
@@ -90,7 +152,19 @@ mod tests {
     use crate::testing::create_test_files;
 
     async fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
-        todo!()
+        let dir = create_test_files(files);
+        let full = format!("{}/{}", dir.path().display(), pattern);
+        let result = glob(Default::default(), Pattern::compile(&full).unwrap()).await;
+        let prefix = format!("{}/", dir.path().display());
+        if let Some(e) = result.errors().next() {
+            panic!("{}", e);
+        }
+        let mut paths: Vec<String> = result
+            .entries()
+            .map(|e| e.path.strip_prefix(&prefix).unwrap().to_owned())
+            .collect();
+        paths.sort();
+        paths
     }
 
     #[tokio::test]
