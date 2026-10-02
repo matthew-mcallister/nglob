@@ -1,6 +1,7 @@
 use std::fs::DirEntry;
 use std::io::Result;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::matcher::{Matcher, TrieEntry};
 use crate::nfa::{Pattern, StateId};
@@ -8,6 +9,8 @@ use crate::trie::Trie;
 use crate::{Entry, FileType, GlobConfig, SmallString, test_log};
 
 mod sync;
+#[cfg(feature = "tokio")]
+mod tokio;
 
 #[derive(Debug)]
 pub(crate) struct WalkerEntry {
@@ -85,36 +88,12 @@ fn add_special_entries(
 
 #[derive(Debug)]
 struct Walker {
-   config: GlobConfig,
+   config: Arc<GlobConfig>,
    pattern: Pattern,
    out: Vec<Result<Entry>>,
 }
 
 impl Walker {
-   fn read_dir(
-      &mut self,
-      cur_dir: &Path,
-      recursion_depth: usize,
-   ) -> Result<Vec<WalkerEntry>> {
-      if recursion_depth > self.config.max_depth {
-         return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("{}: max recursion depth exceeded", cur_dir.display()),
-         ));
-      }
-
-      let follow_symlinks = self.config.follow_symlinks;
-      let mut dir_entries = Vec::new();
-      for entry in std::fs::read_dir(cur_dir)? {
-         match entry.and_then(|e| WalkerEntry::from_dir_entry(e, follow_symlinks)) {
-            Ok(entry) => dir_entries.push(entry),
-            Err(err) => self.out.push(Err(err)),
-         }
-      }
-
-      Ok(dir_entries)
-   }
-
    /// Records matched files/directories and returns recursive states.
    fn match_entries(
       &mut self,

@@ -1,9 +1,10 @@
 use std::io::Result;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::nfa::{Pattern, StateId};
 use crate::test_log;
-use crate::walker::{Entry, GlobConfig, Walker};
+use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
 
 #[derive(Debug)]
 struct SyncWalker {
@@ -11,6 +12,30 @@ struct SyncWalker {
 }
 
 impl SyncWalker {
+    fn read_dir(
+        &mut self,
+        cur_dir: &Path,
+        recursion_depth: usize,
+    ) -> Result<Vec<WalkerEntry>> {
+        if recursion_depth > self.inner.config.max_depth {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("{}: max recursion depth exceeded", cur_dir.display()),
+            ));
+        }
+
+        let follow_symlinks = self.inner.config.follow_symlinks;
+        let mut dir_entries = Vec::new();
+        for entry in std::fs::read_dir(cur_dir)? {
+            match entry.and_then(|e| WalkerEntry::from_dir_entry(e, follow_symlinks)) {
+                Ok(entry) => dir_entries.push(entry),
+                Err(err) => self.inner.out.push(Err(err)),
+            }
+        }
+
+        Ok(dir_entries)
+    }
+
     fn visit_dir(
         &mut self,
         cur_dir: &Path,
@@ -19,7 +44,7 @@ impl SyncWalker {
     ) -> Result<()> {
         test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
 
-        let mut entries = self.inner.read_dir(cur_dir, recursion_depth)?;
+        let mut entries = self.read_dir(cur_dir, recursion_depth)?;
         let recurse = self.inner.match_entries(cur_dir, states, &mut entries);
 
         // Descend
@@ -70,7 +95,7 @@ impl GlobResult {
 
 pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let walker = Walker {
-        config,
+        config: Arc::new(config),
         pattern,
         out: Vec::new(),
     };
