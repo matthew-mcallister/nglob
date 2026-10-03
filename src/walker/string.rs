@@ -84,7 +84,7 @@ impl StringWalker {
 pub fn glob(config: GlobConfig, pattern: Pattern, paths: &[&str]) -> Vec<String> {
     let walker = Walker {
         config: Arc::new(config),
-        pattern,
+        pattern: Arc::new(pattern),
         out: Vec::new(),
     };
     let mut walker = StringWalker {

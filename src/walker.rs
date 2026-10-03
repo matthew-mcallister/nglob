@@ -94,11 +94,20 @@ fn add_special_entries(
 #[derive(Debug)]
 struct Walker {
    config: Arc<GlobConfig>,
-   pattern: Pattern,
+   pattern: Arc<Pattern>,
    out: Vec<Result<Entry>>,
 }
 
 impl Walker {
+   #[cfg(feature = "tokio")]
+   fn fork(&self) -> Self {
+      Self {
+         config: Arc::clone(&self.config),
+         pattern: Arc::clone(&self.pattern),
+         out: Vec::new(),
+      }
+   }
+
    /// Records matched files/directories and returns recursive states.
    fn match_entries(
       &mut self,

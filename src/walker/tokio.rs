@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::io::Result;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -28,6 +30,13 @@ async fn walker_entry(entry: tokio::fs::DirEntry, follow_symlinks: bool) -> Resu
 }
 
 impl TokioWalker {
+    fn fork(&self) -> Self {
+        Self {
+            inner: self.inner.fork(),
+            sender: self.sender.clone(),
+        }
+    }
+
     fn flush(&mut self) {
         if self.inner.out.is_empty() {
             return;
@@ -61,32 +70,41 @@ impl TokioWalker {
         Ok(dir_entries)
     }
 
-    async fn visit_dir(
-        &mut self,
-        cur_dir: &Path,
+    fn visit_dir<'a>(
+        &'a mut self,
+        cur_dir: &'a Path,
         recursion_depth: usize,
         states: Option<Vec<StateId>>,
-    ) -> Result<()> {
-        test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
 
-        let mut entries = self.read_dir(cur_dir, recursion_depth).await?;
-        let recurse = self.inner.match_entries(cur_dir, states, &mut entries);
-        self.flush();
+            let mut entries = self.read_dir(cur_dir, recursion_depth).await?;
+            let recurse = self.inner.match_entries(cur_dir, states, &mut entries);
+            self.flush();
 
-        for (i, states) in recurse.into_iter().enumerate() {
-            if states.is_empty() { continue; }
-            let dir = cur_dir.join(&entries[i].name[..]);
-            let res = Box::pin(self.visit_dir(
-                &dir,
-                recursion_depth + 1,
-                Some(states),
-            )).await;
-            if let Err(e) = res {
-                self.inner.out.push(Err(e));
+            let mut join_set = tokio::task::JoinSet::new();
+            for (i, states) in recurse.into_iter().enumerate() {
+                if states.is_empty() { continue; }
+                let dir = cur_dir.join(&entries[i].name[..]);
+                let mut walker = self.fork();
+                join_set.spawn(async move {
+                    let res = walker.visit_dir(&dir, recursion_depth + 1, Some(states)).await;
+                    if let Err(e) = res {
+                        walker.inner.out.push(Err(e));
+                    }
+                    walker.flush();
+                });
             }
-        }
 
-        Ok(())
+            while let Some(res) = join_set.join_next().await {
+                if let Err(e) = res {
+                    self.inner.out.push(Err(std::io::Error::other(e)));
+                }
+            }
+
+            Ok(())
+        })
     }
 
     async fn walk(&mut self) {
@@ -103,7 +121,7 @@ pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
     let walker = Walker {
         config: Arc::new(config),
-        pattern,
+        pattern: Arc::new(pattern),
         out: Vec::new(),
     };
     let mut walker = TokioWalker {
