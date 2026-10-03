@@ -8,11 +8,12 @@ use crate::nfa::{Pattern, StateId};
 use crate::trie::Trie;
 use crate::{Entry, FileType, GlobConfig, SmallString, test_log};
 
+pub mod string;
 pub mod sync;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct WalkerEntry {
    file_type: FileType,
    name: SmallString,
