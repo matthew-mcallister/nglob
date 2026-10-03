@@ -1,11 +1,13 @@
 use std::collections::hash_map::Entry;
-use std::fmt::Write;
 
 use fnv::{FnvBuildHasher, FnvHashMap};
 
 use crate::nfa::{State, StateId, Pattern, Transition, TransitionRule};
 use crate::test_log;
-use crate::trie::{Trie, TrieId, TrieNode};
+use crate::trie::{Trie, TrieId};
+
+#[cfg(test)] use std::fmt::Write;
+#[cfg(test)] use crate::trie::TrieNode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrieEntry {
@@ -140,6 +142,7 @@ impl<'a> ExpandedState<'a> {
         self.pattern.get(self.pattern_id)
     }
 
+    #[cfg(test)]
     fn trie_node(&self) -> &TrieNode {
         self.trie.get(self.trie_id).unwrap()
     }
@@ -293,13 +296,6 @@ pub(crate) struct Output {
     pub(crate) index: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Retention {
-    Partial,
-    Recurse,
-    Full,
-}
-
 #[derive(Debug)]
 pub(crate) struct Matcher<'a> {
     pattern: &'a Pattern,
@@ -350,10 +346,6 @@ impl<'a> Matcher<'a> {
             recurse: Vec::new(),
             full: Vec::new(),
         }
-    }
-
-    fn merge_state(&mut self, state: StateKey, flags: StateFlags) -> bool {
-        merge_state(&mut self.states, state, flags)
     }
 
     fn record_matches(&mut self) {
@@ -408,7 +400,7 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    // Debug code
+    #[cfg(test)]
     fn show_states(&self) -> String {
         let mut out = String::new();
         let _ = write!(out, "[");
@@ -448,18 +440,18 @@ impl<'a> Matcher<'a> {
     }
 }
 
-fn match_trie<'m, 't>(
-    pattern: &'m Pattern,
-    trie: &'t Trie<TrieEntry>,
-) -> Vec<Output> {
-    let mut matcher = Matcher::new(pattern, trie, None);
-    matcher.run();
-    matcher.full
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn match_trie<'m, 't>(
+        pattern: &'m Pattern,
+        trie: &'t Trie<TrieEntry>,
+    ) -> Vec<Output> {
+        let mut matcher = Matcher::new(pattern, trie, None);
+        matcher.run();
+        matcher.full
+    }
 
     fn matches(pattern: &str, target: &str) -> bool {
         let mut trie = Trie::new();

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::nfa::{Pattern, StateId};
 use crate::{GlobResult, test_log};
-use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
+use crate::walker::{GlobConfig, Walker, WalkerEntry};
 
 #[derive(Debug)]
 struct SyncWalker {

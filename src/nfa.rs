@@ -1,10 +1,10 @@
-use std::fmt::Write;
-use std::ops::Index;
-
 use smallvec::SmallVec;
 
-use crate::pattern::{Ast, ParseError, is_escape_char, parse};
-use crate::{SmallString, test_log};
+use crate::pattern::{Ast, ParseError, parse};
+use crate::SmallString;
+
+#[cfg(test)] use std::fmt::Write;
+#[cfg(test)] use crate::pattern::is_escape_char;
 
 pub(crate) type StateId = u16;
 
@@ -24,12 +24,6 @@ pub(crate) enum TransitionRule {
     Char(char),
     /// Matches any character (used by ?, *, **)
     Wildcard,
-}
-
-impl TransitionRule {
-    fn is_literal(self) -> bool {
-        !matches!(self, Self::WildEpsilon | Self::Wildcard)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -88,7 +82,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    // Debug code
+    #[cfg(test)]
     pub(crate) fn show_accepts(&self) -> String {
         let mut out = String::new();
         for t in self.transitions.iter() {
@@ -213,10 +207,6 @@ impl Pattern {
             source: source.into(),
             states: builder.states,
         })
-    }
-
-    pub(crate) fn transitions(&self, from: StateId) -> impl Iterator<Item = &'_ Transition> + '_ {
-        self.states[from as usize].transitions.iter()
     }
 
     #[cfg(test)]

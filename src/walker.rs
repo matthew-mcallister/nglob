@@ -53,12 +53,6 @@ impl WalkerEntry {
    }
 }
 
-#[derive(Debug)]
-struct WalkerDir {
-   entries: Vec<WalkerEntry>,
-   trie: Trie<TrieEntry>,
-}
-
 const LITERALS: &[&str] = &["", ".", ".."];
 
 fn build_trie(entries: &[WalkerEntry]) -> Trie<TrieEntry> {

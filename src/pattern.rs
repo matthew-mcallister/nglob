@@ -21,6 +21,7 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+#[cfg(test)]
 pub(crate) fn is_escape_char(c: char) -> bool {
     matches!(c, '\\' | '?' | '*' | '{' | '}' | ',')
 }

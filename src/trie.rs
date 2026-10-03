@@ -18,7 +18,7 @@ impl Default for TrieNode {
 }
 
 impl TrieNode {
-    // Debug code
+    #[cfg(test)]
     pub(crate) fn show_accepts(&self) -> String {
         fn write_escaped(w: &mut impl std::fmt::Write, c: char) {
             if c == '"' {
@@ -160,7 +160,7 @@ impl<T> Trie<T> {
         self.values.insert(cur as TrieId, value);
     }
 
-    // Useful for testing
+    #[cfg(test)]
     pub(crate) fn get_key(&self, key: &str) -> Option<&T> {
         let mut cur: usize = 0;
         for ch in key.chars() {
@@ -170,6 +170,7 @@ impl<T> Trie<T> {
         self.values.get(&(cur as TrieId))
     }
 
+    #[cfg(test)]
     pub(crate) fn get(&self, id: TrieId) -> Option<&TrieNode> {
         self.nodes.get(id as usize)
     }
