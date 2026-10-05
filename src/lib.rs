@@ -22,15 +22,15 @@
 //! ### Example
 //!
 //! This config will match only regular files and recurses infinitely.
-//! ```rust
+//! ```rust,ignore
 //! use nglob::GlobConfig;
 //!
-//! GlobConfig {
+//! let config = GlobConfig {
 //!     match_files: true,
-//!     match_directories: true,
-//!     match_directories: true,
+//!     match_directories: false,
+//!     match_other: false,
 //!     ..Default::default()
-//! }
+//! };
 //! ```
 //!
 //! ## Choosing a walker
@@ -53,7 +53,7 @@
 //! Here's an example of synchronous directory matching.
 //!
 //! ```rust
-//! use nglob::GlobConfig;
+//! use nglob::{GlobConfig, Pattern};
 //! use nglob::walker::sync::glob;
 //!
 //! let config = GlobConfig::default();
@@ -73,18 +73,20 @@
 //! interface as
 //!
 //! ```rust
-//! use nglob::GlobConfig;
-//! use nglob::walker::sync::glob;
+//! use nglob::{GlobConfig, Pattern};
+//! use nglob::walker::tokio::glob;
 //!
-//! let config = GlobConfig::default();
-//! let pattern = Pattern::compile("src/**.rs").unwrap();
-//! let output = glob(config, pattern).await;
-//! for result in output.results() {
-//!     match result {
-//!         Ok(e) => println!("{}", e.path),
-//!         Err(e) => println!("error: {}", e),
+//! async {
+//!     let config = GlobConfig::default();
+//!     let pattern = Pattern::compile("src/**.rs").unwrap();
+//!     let output = glob(config, pattern).await;
+//!     for result in output.results() {
+//!         match result {
+//!             Ok(e) => println!("{}", e.path),
+//!             Err(e) => println!("error: {}", e),
+//!         }
 //!     }
-//! }
+//! };
 //! ```
 //!
 //! ### String matching
@@ -99,10 +101,11 @@
 //! and returns strings instead of a `GlobResult`.
 //!
 //! ```rust
-//! use nglob::walker::sync::glob;
+//! use nglob::Pattern;
+//! use nglob::walker::string::glob;
 //!
 //! let pattern = Pattern::compile("src/**.rs").unwrap();
-//! let matches = glob(pattern).await;
+//! let matches = glob(pattern, &["README.md", "src/main.rs", "src/unix/mod.rs"]);
 //! for string in matches {
 //!     println!("{}", string);
 //! }
@@ -240,16 +243,17 @@ impl From<std::fs::FileType> for FileType {
 
 /// A file or discovery matched by a glob pattern.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Entry {
    /// Path to the discovered file or directory. Directories will have a
    /// trailing '/' appended ('\' on Windows).
    pub path: String,
    /// Type of the matched file or directory.
    pub file_type: FileType,
-   _private: (),
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct GlobConfig {
    /// If true, follows symlinks to the file or directory they point to. If
    /// false, symlinks are treated as irregular files. Default: `true`.
@@ -263,7 +267,6 @@ pub struct GlobConfig {
    /// Matches non-regular files, or symlinks if `follow_symlinks` is not true.
    /// Default: `true`.
    pub match_other: bool,
-   _private: (),
 }
 
 impl Default for GlobConfig {
@@ -274,7 +277,6 @@ impl Default for GlobConfig {
          match_files: true,
          match_directories: true,
          match_other: true,
-         _private: (),
       }
    }
 }
