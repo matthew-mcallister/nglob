@@ -121,7 +121,7 @@ pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
     let walker = Walker {
         config: Arc::new(config),
-        pattern: Arc::new(pattern),
+        pattern,
         out: Vec::new(),
     };
     let mut walker = TokioWalker {

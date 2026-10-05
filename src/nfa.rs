@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use smallvec::SmallVec;
 
 use crate::pattern::{Ast, ParseError, parse};
@@ -174,16 +176,15 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
     }
 }
 
-// FIXME: Back by an Arc for cheap clones
-#[derive(Clone, Debug)]
-pub struct Pattern {
+#[derive(Debug)]
+pub struct PatternInner {
     pub(crate) base_path: SmallString,
     pub(crate) source: SmallString,
     pub(crate) states: Vec<State>,
 }
 
-impl Pattern {
-    pub fn compile(source: &str) -> Result<Self, ParseError> {
+impl PatternInner {
+    fn compile(source: &str) -> Result<Self, ParseError> {
         let parsed = parse(source)?;
         let mut builder = PatternBuilder::new();
         compile(&mut builder, &parsed.root, 0, 1);
@@ -194,12 +195,12 @@ impl Pattern {
         })
     }
 
-    pub fn source(&self) -> &str {
+    pub(crate) fn source(&self) -> &str {
         &self.source
     }
 
     #[cfg(test)]
-    pub(crate) fn compile_without_base(source: &str) -> Result<Self, ParseError> {
+    fn compile_without_base(source: &str) -> Result<Self, ParseError> {
         let ast = crate::pattern::parse_ast(source)?;
         let mut builder = PatternBuilder::new();
         compile(&mut builder, &ast, 0, 1);
@@ -228,6 +229,38 @@ impl Pattern {
 
     pub(crate) fn get(&self, index: StateId) -> &State {
         &self.states[index as usize]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Pattern {
+    inner: Arc<PatternInner>,
+}
+
+impl Pattern {
+    pub fn compile(source: &str) -> Result<Self, ParseError> {
+        Ok(Self {
+            inner: Arc::new(PatternInner::compile(source)?),
+        })
+    }
+
+    pub fn source(&self) -> &str {
+        self.inner.source()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compile_without_base(source: &str) -> Result<Self, ParseError> {
+        Ok(Self {
+            inner: Arc::new(PatternInner::compile_without_base(source)?),
+        })
+    }
+}
+
+impl std::ops::Deref for Pattern {
+    type Target = PatternInner;
+
+    fn deref(&self) -> &PatternInner {
+        &self.inner
     }
 }
 

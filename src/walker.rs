@@ -88,7 +88,7 @@ fn add_special_entries(
 #[derive(Debug)]
 struct Walker {
    config: Arc<GlobConfig>,
-   pattern: Arc<Pattern>,
+   pattern: Pattern,
    out: Vec<Result<Entry>>,
 }
 
@@ -97,7 +97,7 @@ impl Walker {
    fn fork(&self) -> Self {
       Self {
          config: Arc::clone(&self.config),
-         pattern: Arc::clone(&self.pattern),
+         pattern: self.pattern.clone(),
          out: Vec::new(),
       }
    }

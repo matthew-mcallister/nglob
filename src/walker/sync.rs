@@ -76,7 +76,7 @@ impl SyncWalker {
 pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let walker = Walker {
         config: Arc::new(config),
-        pattern: Arc::new(pattern),
+        pattern,
         out: Vec::new(),
     };
     let mut walker = SyncWalker {
