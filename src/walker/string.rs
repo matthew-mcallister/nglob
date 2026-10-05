@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use fnv::FnvHashMap;
 
-use crate::nfa::{Pattern, StateId};
 use crate::{FileType, test_log};
-use crate::walker::{GlobConfig, Walker, WalkerEntry};
+use crate::nfa::{Pattern, StateId};
+use crate::walker::{Walker, WalkerEntry};
 
 #[derive(Debug)]
 pub struct VirtualDir {
@@ -81,9 +81,9 @@ impl StringWalker {
 /// Host system file path semantics are used when matching, including path
 /// separators. The pattern may contain '.' and '..' and they will work as
 /// expected.
-pub fn glob(config: GlobConfig, pattern: Pattern, paths: &[&str]) -> Vec<String> {
+pub fn glob(pattern: Pattern, paths: &[&str]) -> Vec<String> {
     let walker = Walker {
-        config: Arc::new(config),
+        config: Arc::new(Default::default()),
         pattern: Arc::new(pattern),
         out: Vec::new(),
     };
@@ -107,7 +107,7 @@ mod tests {
 
     fn glob_paths(pattern: &str, paths: &[&str]) -> Vec<String> {
         let pattern = Pattern::compile(pattern).unwrap();
-        let mut matches = glob(GlobConfig::default(), pattern, paths);
+        let mut matches = glob(pattern, paths);
         matches.sort();
         matches
     }

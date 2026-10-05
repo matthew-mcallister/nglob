@@ -129,6 +129,7 @@ impl Walker {
          self.out.push(Ok(Entry {
             path: full_path.to_str().unwrap().to_owned(),
             file_type: entry.file_type,
+            _private: (),
          }))
       }
 
