@@ -81,9 +81,27 @@ impl Transition {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
     pub(crate) transitions: SmallVec<[Transition; 1]>,
+    pub(crate) is_epsilon_frontier: bool,
+    pub(crate) is_component_frontier: bool,
 }
 
 impl State {
+    pub(crate) fn add_transition(&mut self, transition: Transition) {
+        match transition.rule {
+            TransitionRule::Char(_) | TransitionRule::Wildcard => {
+                self.is_epsilon_frontier = true;
+                self.is_component_frontier = true;
+            }
+            TransitionRule::WildEpsilon => {
+                self.is_component_frontier = true;
+            }
+            TransitionRule::Epsilon
+            | TransitionRule::NextComponent
+            | TransitionRule::WildNextComponent => {}
+        }
+        self.transitions.push(transition);
+    }
+
     #[cfg(test)]
     pub(crate) fn show_accepts(&self) -> String {
         let mut out = String::new();
@@ -125,8 +143,7 @@ impl PatternBuilder {
     }
 
     pub(crate) fn connect(&mut self, from: StateId, transition: Transition) {
-        let state = &mut self.states[from as usize];
-        state.transitions.push(transition);
+        self.states[from as usize].add_transition(transition);
     }
 }
 

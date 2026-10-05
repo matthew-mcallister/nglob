@@ -185,29 +185,11 @@ impl<'a> ExpandedState<'a> {
 
     /// State has any transitions which are not epsilons
     fn is_epsilon_frontier(&self) -> bool {
+        let node = self.pattern_node();
         if self.flags.next_component {
-            // FIXME: Precompute
-            self.pattern_node()
-                .transitions
-                .iter()
-                .any(|t| !matches!(
-                    t.rule,
-                    TransitionRule::Epsilon
-                        | TransitionRule::NextComponent
-                        | TransitionRule::WildNextComponent,
-                ))
+            node.is_component_frontier
         } else {
-            // FIXME: Precompute
-            self.pattern_node()
-                .transitions
-                .iter()
-                .any(|t| !matches!(
-                    t.rule,
-                    TransitionRule::Epsilon
-                        | TransitionRule::WildEpsilon
-                        | TransitionRule::NextComponent
-                        | TransitionRule::WildNextComponent,
-                ))
+            node.is_epsilon_frontier
         }
     }
 
@@ -382,7 +364,6 @@ impl<'a> Matcher<'a> {
         self.record_matches();
 
         // Filter out useless states
-        // XXX: I think we can just delete this line?
         self.states.retain(|key, flags| {
             ExpandedState::raise(&self.pattern, &self.trie, *key, *flags).is_epsilon_frontier()
         });
