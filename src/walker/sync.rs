@@ -17,14 +17,14 @@ impl SyncWalker {
         cur_dir: &Path,
         recursion_depth: usize,
     ) -> Result<Vec<WalkerEntry>> {
-        if recursion_depth > self.inner.config.max_depth {
+        if recursion_depth > self.inner.config.max_depth() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("{}: max recursion depth exceeded", cur_dir.display()),
             ));
         }
 
-        let follow_symlinks = self.inner.config.follow_symlinks;
+        let follow_symlinks = self.inner.config.follow_symlinks();
         let mut dir_entries = Vec::new();
         for entry in std::fs::read_dir(cur_dir)? {
             match entry.and_then(|e| WalkerEntry::from_dir_entry(e, follow_symlinks)) {
@@ -191,11 +191,9 @@ mod tests {
     fn match_filter() {
         assert_eq!(
             glob_with_config(
-                GlobConfig {
-                    match_files: false,
-                    match_directories: true,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_files(false)
+                    .with_match_directories(true),
                 "**",
                 &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
             ),
@@ -203,11 +201,9 @@ mod tests {
         );
         assert_eq!(
             glob_with_config(
-                GlobConfig {
-                    match_files: true,
-                    match_directories: false,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_files(true)
+                    .with_match_directories(false),
                 "**",
                 &["main.rs", "src/lib.rs", "src/sub/mod.rs", "README.md"]
             ),
@@ -222,11 +218,9 @@ mod tests {
         let _socket = std::os::unix::net::UnixListener::bind(dir.path().join("sock")).unwrap();
         assert_eq!(
             glob_with_dir(
-                GlobConfig {
-                    match_files: false,
-                    match_other: true,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_files(false)
+                    .with_match_other(true),
                 "*",
                 dir.path(),
             ),
@@ -234,11 +228,9 @@ mod tests {
         );
         assert_eq!(
             glob_with_dir(
-                GlobConfig {
-                    match_files: true,
-                    match_other: false,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_files(true)
+                    .with_match_other(false),
                 "*",
                 dir.path(),
             ),
@@ -255,13 +247,11 @@ mod tests {
 
         assert_eq!(
             glob_with_dir(
-                GlobConfig {
-                    match_files: false,
-                    match_directories: false,
-                    match_other: true,
-                    follow_symlinks: false,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_files(false)
+                    .with_match_directories(false)
+                    .with_match_other(true)
+                    .with_follow_symlinks(false),
                 "**",
                 dir.path(),
             ),
@@ -269,11 +259,9 @@ mod tests {
         );
         assert_eq!(
             glob_with_dir(
-                GlobConfig {
-                    match_other: false,
-                    follow_symlinks: false,
-                    ..Default::default()
-                },
+                GlobConfig::new()
+                    .with_match_other(false)
+                    .with_follow_symlinks(false),
                 "**",
                 dir.path(),
             ),

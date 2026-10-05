@@ -55,7 +55,7 @@ impl StringWalker {
     ) {
         test_log!("visiting {} (depth {recursion_depth})", cur_dir);
 
-        if recursion_depth > self.inner.config.max_depth {
+        if recursion_depth > self.inner.config.max_depth() {
             return;
         }
 

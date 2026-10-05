@@ -21,16 +21,14 @@
 //!
 //! ### Example
 //!
-//! This config will match only regular files and recurses infinitely.
-//! ```rust,ignore
+//! This config will match only regular files.
+//! ```rust
 //! use nglob::GlobConfig;
 //!
-//! let config = GlobConfig {
-//!     match_files: true,
-//!     match_directories: false,
-//!     match_other: false,
-//!     ..Default::default()
-//! };
+//! let config = GlobConfig::new()
+//!     .with_match_files(true)
+//!     .with_match_directories(false)
+//!     .with_match_other(false);
 //! ```
 //!
 //! ## Choosing a walker
@@ -73,20 +71,24 @@
 //! interface as
 //!
 //! ```rust
+//! # #[cfg(feature = "tokio")]
+//! # fn main() {
+//! # async {
 //! use nglob::{GlobConfig, Pattern};
 //! use nglob::walker::tokio::glob;
 //!
-//! async {
-//!     let config = GlobConfig::default();
-//!     let pattern = Pattern::compile("src/**.rs").unwrap();
-//!     let output = glob(config, pattern).await;
-//!     for result in output.results() {
-//!         match result {
-//!             Ok(e) => println!("{}", e.path),
-//!             Err(e) => println!("error: {}", e),
-//!         }
+//! let config = GlobConfig::default();
+//! let pattern = Pattern::compile("src/**.rs").unwrap();
+//! let output = glob(config, pattern).await;
+//! for result in output.results() {
+//!     match result {
+//!         Ok(e) => println!("{}", e.path),
+//!         Err(e) => println!("error: {}", e),
 //!     }
-//! };
+//! }
+//! # };}
+//! # #[cfg(not(feature = "tokio"))]
+//! # fn main() {}
 //! ```
 //!
 //! ### String matching
@@ -192,6 +194,7 @@
 //! `.*`. If you *want* to match `..`, try an alternative pattern like `.{.,?}`
 //! instead.
 
+mod config;
 mod nfa;
 mod pattern;
 mod matcher;
@@ -201,6 +204,7 @@ pub mod walker;
 #[cfg(test)]
 mod testing;
 
+pub use crate::config::GlobConfig;
 pub use crate::nfa::Pattern;
 pub use crate::pattern::ParseError;
 
@@ -250,45 +254,6 @@ pub struct Entry {
    pub path: String,
    /// Type of the matched file or directory.
    pub file_type: FileType,
-}
-
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct GlobConfig {
-   /// If true, follows symlinks to the file or directory they point to. If
-   /// false, symlinks are treated as irregular files. Default: `true`.
-   pub follow_symlinks: bool,
-   /// Maximum recursion depth. Default: 64.
-   pub max_depth: usize,
-   /// Matches regular files. Default: `true`.
-   pub match_files: bool,
-   /// Matches directories. Default: `true`.
-   pub match_directories: bool,
-   /// Matches non-regular files, or symlinks if `follow_symlinks` is not true.
-   /// Default: `true`.
-   pub match_other: bool,
-}
-
-impl Default for GlobConfig {
-   fn default() -> Self {
-      Self {
-         follow_symlinks: true,
-         max_depth: 64,
-         match_files: true,
-         match_directories: true,
-         match_other: true,
-      }
-   }
-}
-
-impl GlobConfig {
-   pub(crate) fn should_match(&self, file_type: FileType) -> bool {
-      match file_type {
-         FileType::File => self.match_files,
-         FileType::Directory => self.match_directories,
-         FileType::Symlink | FileType::Other => self.match_other,
-      }
-   }
 }
 
 /// Houses

@@ -50,14 +50,14 @@ impl TokioWalker {
         cur_dir: &Path,
         recursion_depth: usize,
     ) -> Result<Vec<WalkerEntry>> {
-        if recursion_depth > self.inner.config.max_depth {
+        if recursion_depth > self.inner.config.max_depth() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("{}: max recursion depth exceeded", cur_dir.display()),
             ));
         }
 
-        let follow_symlinks = self.inner.config.follow_symlinks;
+        let follow_symlinks = self.inner.config.follow_symlinks();
         let mut dir_entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(cur_dir).await?;
         while let Some(entry) = read_dir.next_entry().await? {
