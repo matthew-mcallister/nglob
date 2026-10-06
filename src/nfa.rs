@@ -249,18 +249,43 @@ impl PatternInner {
     }
 }
 
+/// A compiled glob pattern.
+///
+/// Pattern strings must be compiled by [`Pattern::compile`] before they can be
+/// used for searching. Compiling a pattern can be expensive so don't do it in
+/// a loop. However, once compiled, patterns are reference-counted and cheap to
+/// clone.
+///
+/// See the crate documentation for in-depth syntax information.
+///
+/// #### Special symbols
+///
+/// | Symbol | Meaning |
+/// | --- | --- |
+/// | `*` | Matches zero or more characters, not including '/' |
+/// | `**` | Matches zero or more characters, including '/' |
+/// | `?` | Matches any one character |
+/// | `{a,b,...}` | Matches exactly one alternative |
+/// | `\` | Introduces an escape sequence |
+///
+/// #### Escape sequences
+///
+/// Possible escape sequences: `\* \? \{ \} \, \\`.
 #[derive(Clone, Debug)]
 pub struct Pattern {
     inner: Arc<PatternInner>,
 }
 
 impl Pattern {
+    /// Compiles a pattern. Returns [`ParseError`] if the source contains a
+    /// syntax error.
     pub fn compile(source: &str) -> Result<Self, ParseError> {
         Ok(Self {
             inner: Arc::new(PatternInner::compile(source)?),
         })
     }
 
+    /// Returns the raw pattern source string.
     pub fn source(&self) -> &str {
         self.inner.source()
     }

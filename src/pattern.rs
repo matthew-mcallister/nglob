@@ -2,10 +2,15 @@ use std::fmt::Write;
 use std::iter::FusedIterator;
 use std::path::is_separator;
 
+/// Error encountered when compiling a pattern string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
+    /// Invalid escape sequence.
     InvalidEscape(char),
+    /// Incomplete escape sequence, e.g. a trailing `\` at the end of
+    /// the string.
     IncompleteEscape,
+    /// Unclosed delimiter, e.g. an unpaired `{`.
     UnclosedDelimiter(char),
 }
 
@@ -117,23 +122,6 @@ pub(crate) enum Ast {
     StarStar,   // **
 }
 
-/// # Special symbols
-///
-/// | Symbol | Meaning |
-/// | --- | --- |
-/// | `*` | Matches zero or more characters, not including '/' |
-/// | `**` | Matches zero or more characters, including '/' |
-/// | `?` | Matches any one character |
-/// | `{a,b,...}` | Matches exactly one alternative |
-/// | `\` | Introduces an escape sequence |
-///
-/// # Escape sequences
-///
-/// Possible escape sequences: `\* \? \{ \} \, \\`.
-///
-/// # Path separators
-///
-/// On Windows, both `/` and `\\` will be accepted as separators.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedPattern {
     /// Base directory for search

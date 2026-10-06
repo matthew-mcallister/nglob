@@ -1,3 +1,15 @@
+//! Walker implementations.
+//!
+//! A walker is the part of the glob engine which fetches directory contents
+//! and feeds them to the pattern matcher. All walkers share the same pattern
+//! matching logic but operate on different inputs or a different runtime.
+//!
+//! Currently there are three walkers available:
+//!
+//! - [`sync`]: Single-threaded synchronous file search
+//! - [`tokio`]: Asynchronous file search powered by `tokio::fs`
+//! - [`string`]: String matching on a virtual directory system.
+
 use std::fs::DirEntry;
 use std::io::Result;
 use std::path::Path;

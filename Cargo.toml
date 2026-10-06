@@ -2,6 +2,11 @@
 name = "nglob"
 version = "0.99.0"
 edition = "2024"
+authors = ["Matthew McAllister <matthew.mcallister.0@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/matthew-mcallister/nglob"
+description = "A library for globbing files and strings."
 
 [dependencies]
 bitflags = "^2.13.2"
@@ -18,3 +23,8 @@ tokio-stream = { version = "^0.1.19", features = ["fs"] }
 
 [features]
 tokio = ["dep:tokio", "dep:tokio-stream"]
+
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

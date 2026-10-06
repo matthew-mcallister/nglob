@@ -1,3 +1,5 @@
+//! String-matching walker for virtual filesystems.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,12 +10,12 @@ use crate::nfa::{Pattern, StateId};
 use crate::walker::{Walker, WalkerEntry};
 
 #[derive(Debug)]
-pub struct VirtualDir {
+struct VirtualDir {
     entries: Vec<WalkerEntry>,
 }
 
 #[derive(Debug)]
-pub struct VirtualFs {
+struct VirtualFs {
     dirs: FnvHashMap<PathBuf, VirtualDir>,
 }
 
@@ -75,8 +77,9 @@ impl StringWalker {
     }
 }
 
-/// Returns filepaths which match the given pattern. All paths are treated as
-/// files, not directories.
+/// Returns filepaths which match the given pattern.
+///
+/// All paths are treated as files, not directories.
 ///
 /// Host system file path semantics are used when matching, including path
 /// separators. The pattern may contain '.' and '..' and they will work as

@@ -1,3 +1,5 @@
+//! Single-threaded synchronous filesystem walker.
+
 use std::io::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -73,6 +75,7 @@ impl SyncWalker {
     }
 }
 
+/// Synchronous, single-threaded file glob routine.
 pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let walker = Walker {
         config: Arc::new(config),

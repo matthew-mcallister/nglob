@@ -1,3 +1,5 @@
+//! Tokio-based parallel/async filesystem walker.
+
 use std::future::Future;
 use std::io::Result;
 use std::path::Path;
@@ -117,6 +119,8 @@ impl TokioWalker {
     }
 }
 
+/// Asynchronous file glob routine using Tokio. Gathers all matches/errors into
+/// a single `GlobResult` rather than streaming results.
 pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
     let walker = Walker {
