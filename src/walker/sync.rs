@@ -76,10 +76,10 @@ impl SyncWalker {
 }
 
 /// Synchronous, single-threaded file glob routine.
-pub fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
+pub fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
     let walker = Walker {
-        config: Arc::new(config),
-        pattern,
+        config: Arc::new(config.clone()),
+        pattern: pattern.clone(),
         out: Vec::new(),
     };
     let mut walker = SyncWalker {
@@ -99,7 +99,7 @@ mod tests {
 
     fn glob_with_dir(config: GlobConfig, pattern: &str, dir: &Path) -> Vec<String> {
         let full = format!("{}/{}", dir.display(), pattern);
-        let result = glob(config, Pattern::compile(&full).unwrap());
+        let result = glob(&config, &Pattern::compile(&full).unwrap());
         let prefix = format!("{}/", dir.display());
         if let Some(e) = result.errors().next() {
             panic!("{}", e);

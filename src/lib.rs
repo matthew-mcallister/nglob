@@ -55,7 +55,7 @@
 //!
 //! let config = GlobConfig::default();
 //! let pattern = Pattern::compile("src/**.rs").unwrap();
-//! let output = glob(config, pattern);
+//! let output = glob(&config, &pattern);
 //! for result in output.results() {
 //!     match result {
 //!         Ok(e) => println!("{}", e.path),
@@ -78,7 +78,7 @@
 //!
 //! let config = GlobConfig::default();
 //! let pattern = Pattern::compile("src/**.rs").unwrap();
-//! let output = glob(config, pattern).await;
+//! let output = glob(&config, &pattern).await;
 //! for result in output.results() {
 //!     match result {
 //!         Ok(e) => println!("{}", e.path),
@@ -106,7 +106,7 @@
 //! use nglob::walker::string::glob;
 //!
 //! let pattern = Pattern::compile("src/**.rs").unwrap();
-//! let matches = glob(pattern, &["README.md", "src/main.rs", "src/unix/mod.rs"]);
+//! let matches = glob(&pattern, &["README.md", "src/main.rs", "src/unix/mod.rs"]);
 //! for string in matches {
 //!     println!("{}", string);
 //! }

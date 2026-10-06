@@ -84,10 +84,10 @@ impl StringWalker {
 /// Host system file path semantics are used when matching, including path
 /// separators. The pattern may contain '.' and '..' and they will work as
 /// expected.
-pub fn glob(pattern: Pattern, paths: &[&str]) -> Vec<String> {
+pub fn glob(pattern: &Pattern, paths: &[&str]) -> Vec<String> {
     let walker = Walker {
         config: Arc::new(Default::default()),
-        pattern,
+        pattern: pattern.clone(),
         out: Vec::new(),
     };
     let mut walker = StringWalker {
@@ -110,7 +110,7 @@ mod tests {
 
     fn glob_paths(pattern: &str, paths: &[&str]) -> Vec<String> {
         let pattern = Pattern::compile(pattern).unwrap();
-        let mut matches = glob(pattern, paths);
+        let mut matches = glob(&pattern, paths);
         matches.sort();
         matches
     }

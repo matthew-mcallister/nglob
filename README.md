@@ -33,7 +33,7 @@ use nglob::walker::sync::glob;
 
 let config = GlobConfig::default();
 let pattern = Pattern::compile("src/**.rs").unwrap();
-let output = glob(config, pattern);
+let output = glob(&config, &pattern);
 for result in output.results() {
     match result {
         Ok(e) => println!("{}", e.path),

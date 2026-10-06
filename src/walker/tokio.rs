@@ -121,11 +121,11 @@ impl TokioWalker {
 
 /// Asynchronous file glob routine using Tokio. Gathers all matches/errors into
 /// a single `GlobResult` rather than streaming results.
-pub async fn glob(config: GlobConfig, pattern: Pattern) -> GlobResult {
+pub async fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
     let walker = Walker {
-        config: Arc::new(config),
-        pattern,
+        config: Arc::new(config.clone()),
+        pattern: pattern.clone(),
         out: Vec::new(),
     };
     let mut walker = TokioWalker {
@@ -155,7 +155,7 @@ mod tests {
     async fn glob_files(pattern: &str, files: &[&str]) -> Vec<String> {
         let dir = create_test_files(files);
         let full = format!("{}/{}", dir.path().display(), pattern);
-        let result = glob(Default::default(), Pattern::compile(&full).unwrap()).await;
+        let result = glob(&Default::default(), &Pattern::compile(&full).unwrap()).await;
         let prefix = format!("{}/", dir.path().display());
         if let Some(e) = result.errors().next() {
             panic!("{}", e);
