@@ -210,9 +210,7 @@
 //! with a non-literal prefix, such as `{C,D}:\\` or `//host/*`, it will be
 //! treated as a relative file path rather than searching from multiple bases.
 
-#![cfg_attr(docsrs, doc(auto_cfg(hide(loom))))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 mod config;
 mod nfa;
