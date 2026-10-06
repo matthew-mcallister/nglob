@@ -39,7 +39,8 @@
 //!
 //! - [`walker::sync::glob`]: Synchronous, single-threaded directory search.
 //! - [`walker::tokio::glob`]: Requires the `tokio` feature. Parallel,
-//!   asynchronous search based on tokio.
+//!   asynchronous search based on tokio. This is gated behind the `tokio`
+//!   feature.
 //! - [`walker::string::glob`]: Matches against a list of file path strings
 //!   without interacting with the filesystem. This is intended for searching
 //!   filepaths inside applications that deal with archives, HTTP directories,

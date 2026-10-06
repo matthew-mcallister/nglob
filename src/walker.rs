@@ -7,7 +7,8 @@
 //! Currently there are three walkers available:
 //!
 //! - [`sync`]: Single-threaded synchronous file search
-//! - [`tokio`]: Asynchronous file search powered by `tokio::fs`
+//! - [`tokio`]: Asynchronous file search powered by `tokio::fs`. Requires the
+//!   `tokio` feature.
 //! - [`string`]: String matching on a virtual directory system.
 
 use std::fs::DirEntry;
