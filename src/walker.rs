@@ -12,14 +12,13 @@
 //! - [`string`]: String matching on a virtual directory system.
 
 use std::fs::DirEntry;
-use std::io::Result;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::matcher::{Matcher, TrieEntry};
 use crate::nfa::{Pattern, StateId};
 use crate::trie::Trie;
-use crate::{Entry, FileType, GlobConfig, SmallString, test_log};
+use crate::{Entry, FileType, GlobConfig, GlobError, SmallString, test_log};
 
 pub mod string;
 pub mod sync;
@@ -32,37 +31,39 @@ struct WalkerEntry {
    name: SmallString,
 }
 
-fn get_file_type(entry: &DirEntry) -> Result<FileType> {
-   let file_type = entry.file_type()?;
+fn get_file_type(entry: &DirEntry) -> Result<FileType, GlobError> {
+   let path = entry.path();
+   let file_type = entry.file_type().map_err(|e| GlobError::new(&path, e))?;
    if file_type.is_symlink() {
-      Ok(entry.path().metadata()?.file_type().into())
+      Ok(entry.path().metadata().map_err(|e| GlobError::new(&path, e))?.file_type().into())
    } else {
       Ok(file_type.into())
    }
 }
 
 impl WalkerEntry {
-   fn from_parts(path: &Path, file_type: FileType) -> Result<Self> {
+   fn from_parts(path: &Path, file_type: FileType) -> Result<Self, GlobError> {
       let name: SmallString = path
          .file_name()
          .unwrap()
          .to_str()
          .ok_or_else(|| {
             let kind = std::io::ErrorKind::InvalidData;
-            let message = format!("filename contains invalid UTF-8: {}", path.to_string_lossy());
-            std::io::Error::new(kind, message)
+            let message = "filename contains invalid UTF-8";
+            GlobError::new(path, std::io::Error::new(kind, message))
          })?
          .into();
       Ok(Self { name, file_type })
    }
 
-   fn from_dir_entry(entry: DirEntry, follow_symlinks: bool) -> Result<Self> {
+   fn from_dir_entry(entry: DirEntry, follow_symlinks: bool) -> Result<Self, GlobError> {
+      let path = entry.path();
       let file_type = if follow_symlinks {
          get_file_type(&entry)?
       } else {
-         entry.file_type()?.into()
+         entry.file_type().map_err(|e| GlobError::new(&path, e))?.into()
       };
-      Self::from_parts(&entry.path(), file_type)
+      Self::from_parts(&path, file_type)
    }
 }
 
@@ -102,7 +103,7 @@ fn add_special_entries(
 struct Walker {
    config: Arc<GlobConfig>,
    pattern: Pattern,
-   out: Vec<Result<Entry>>,
+   out: Vec<Result<Entry, GlobError>>,
 }
 
 impl Walker {

@@ -1,11 +1,10 @@
 //! Single-threaded synchronous filesystem walker.
 
-use std::io::Result;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::nfa::{Pattern, StateId};
-use crate::{GlobResult, test_log};
+use crate::{GlobError, GlobResult, test_log};
 use crate::walker::{GlobConfig, Walker, WalkerEntry};
 
 #[derive(Debug)]
@@ -18,20 +17,25 @@ impl SyncWalker {
         &mut self,
         cur_dir: &Path,
         recursion_depth: usize,
-    ) -> Result<Vec<WalkerEntry>> {
+    ) -> Result<Vec<WalkerEntry>, GlobError> {
         if recursion_depth > self.inner.config.max_depth() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{}: max recursion depth exceeded", cur_dir.display()),
+            return Err(GlobError::new(
+                cur_dir,
+                std::io::Error::other("max recursion depth exceeded"),
             ));
         }
 
         let follow_symlinks = self.inner.config.follow_symlinks();
         let mut dir_entries = Vec::new();
-        for entry in std::fs::read_dir(cur_dir)? {
-            match entry.and_then(|e| WalkerEntry::from_dir_entry(e, follow_symlinks)) {
-                Ok(entry) => dir_entries.push(entry),
-                Err(err) => self.inner.out.push(Err(err)),
+        let read_dir = std::fs::read_dir(cur_dir)
+            .map_err(|e| GlobError::new(cur_dir, e))?;
+        for entry in read_dir {
+            match entry {
+                Ok(entry) => match WalkerEntry::from_dir_entry(entry, follow_symlinks) {
+                    Ok(entry) => dir_entries.push(entry),
+                    Err(err) => self.inner.out.push(Err(err)),
+                },
+                Err(err) => self.inner.out.push(Err(GlobError::new(cur_dir, err))),
             }
         }
 
@@ -43,7 +47,7 @@ impl SyncWalker {
         cur_dir: &Path,
         recursion_depth: usize,
         states: Option<Vec<StateId>>,
-    ) -> Result<()> {
+    ) -> Result<(), GlobError> {
         test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
 
         let mut entries = self.read_dir(cur_dir, recursion_depth)?;

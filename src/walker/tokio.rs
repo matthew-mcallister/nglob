@@ -1,7 +1,6 @@
 //! Tokio-based parallel/async filesystem walker.
 
 use std::future::Future;
-use std::io::Result;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -10,7 +9,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::{FileType, GlobResult};
+use crate::{FileType, GlobError, GlobResult};
 use crate::nfa::{Pattern, StateId};
 use crate::test_log;
 use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
@@ -18,17 +17,18 @@ use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
 #[derive(Debug)]
 struct TokioWalker {
     inner: Walker,
-    sender: UnboundedSender<Vec<Result<Entry>>>,
+    sender: UnboundedSender<Vec<Result<Entry, GlobError>>>,
 }
 
-async fn walker_entry(entry: tokio::fs::DirEntry, follow_symlinks: bool) -> Result<WalkerEntry> {
-    let file_type = entry.file_type().await?;
+async fn walker_entry(entry: tokio::fs::DirEntry, follow_symlinks: bool) -> Result<WalkerEntry, GlobError> {
+    let path = entry.path();
+    let file_type = entry.file_type().await.map_err(|e| GlobError::new(&path, e))?;
     let file_type = if follow_symlinks && file_type.is_symlink() {
-        entry.metadata().await?.file_type().into()
+        entry.metadata().await.map_err(|e| GlobError::new(&path, e))?.file_type().into()
     } else {
         FileType::from(file_type)
     };
-    WalkerEntry::from_parts(&entry.path(), file_type)
+    WalkerEntry::from_parts(&path, file_type)
 }
 
 impl TokioWalker {
@@ -51,18 +51,24 @@ impl TokioWalker {
         &mut self,
         cur_dir: &Path,
         recursion_depth: usize,
-    ) -> Result<Vec<WalkerEntry>> {
+    ) -> Result<Vec<WalkerEntry>, GlobError> {
         if recursion_depth > self.inner.config.max_depth() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("{}: max recursion depth exceeded", cur_dir.display()),
+            return Err(GlobError::new(
+                cur_dir,
+                std::io::Error::other("max recursion depth exceeded"),
             ));
         }
 
         let follow_symlinks = self.inner.config.follow_symlinks();
         let mut dir_entries = Vec::new();
-        let mut read_dir = tokio::fs::read_dir(cur_dir).await?;
-        while let Some(entry) = read_dir.next_entry().await? {
+        let mut read_dir = tokio::fs::read_dir(cur_dir)
+            .await
+            .map_err(|e| GlobError::new(cur_dir, e))?;
+        while let Some(entry) = read_dir
+            .next_entry()
+            .await
+            .map_err(|e| GlobError::new(cur_dir, e))?
+        {
             match walker_entry(entry, follow_symlinks).await {
                 Ok(entry) => dir_entries.push(entry),
                 Err(err) => self.inner.out.push(Err(err)),
@@ -77,7 +83,7 @@ impl TokioWalker {
         cur_dir: &'a Path,
         recursion_depth: usize,
         states: Option<Vec<StateId>>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), GlobError>> + Send + 'a>> {
         Box::pin(async move {
             test_log!("visiting {} (depth {recursion_depth})", cur_dir.display());
 
@@ -101,7 +107,8 @@ impl TokioWalker {
 
             while let Some(res) = join_set.join_next().await {
                 if let Err(e) = res {
-                    self.inner.out.push(Err(std::io::Error::other(e)));
+                    let error = GlobError::new(cur_dir, std::io::Error::other(e));
+                    self.inner.out.push(Err(error));
                 }
             }
 
@@ -124,7 +131,7 @@ impl TokioWalker {
 /// This routine gathers all matches/errors into a single `GlobResult` rather
 /// than streaming results.
 pub async fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry>>>();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Vec<Result<Entry, GlobError>>>();
     let walker = Walker {
         config: Arc::new(config.clone()),
         pattern: pattern.clone(),

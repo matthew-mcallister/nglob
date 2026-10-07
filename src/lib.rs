@@ -214,6 +214,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod config;
+mod error;
 mod nfa;
 mod pattern;
 mod matcher;
@@ -224,6 +225,7 @@ pub mod walker;
 mod testing;
 
 pub use crate::config::GlobConfig;
+pub use crate::error::GlobError;
 pub use crate::nfa::Pattern;
 pub use crate::pattern::ParseError;
 
@@ -281,12 +283,12 @@ pub struct Entry {
 /// Results of a glob file search, containing both matches and errors.
 #[derive(Debug)]
 pub struct GlobResult {
-   results: Vec<std::io::Result<Entry>>,
+   results: Vec<Result<Entry, GlobError>>,
 }
 
 impl GlobResult {
    /// All results and errors encounted by the matcher.
-   pub fn results(&self) -> &[std::io::Result<Entry>] {
+   pub fn results(&self) -> &[Result<Entry, GlobError>] {
       &self.results
    }
 
@@ -296,7 +298,7 @@ impl GlobResult {
    }
 
    /// Iterates over any encountered errors, skipping matches.
-   pub fn errors(&self) -> impl Iterator<Item = &std::io::Error> + '_ {
+   pub fn errors(&self) -> impl Iterator<Item = &GlobError> + '_ {
       self.results.iter().filter_map(|r| r.as_ref().err())
    }
 }
