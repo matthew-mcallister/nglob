@@ -239,9 +239,9 @@ macro_rules! test_log {
    ($($tok:tt)*) => {}
 }
 
-pub(crate) use test_log;
+use test_log;
 
-pub(crate) type SmallString = smallstr::SmallString<[u8; 23]>;
+type SmallString = smallstr::SmallString<[u8; 23]>;
 
 /// File type, used for filtering and returned as part of the glob result set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -281,7 +281,7 @@ pub struct Entry {
 /// Results of a glob file search, containing both matches and errors.
 #[derive(Debug)]
 pub struct GlobResult {
-   pub(crate) results: Vec<std::io::Result<Entry>>,
+   results: Vec<std::io::Result<Entry>>,
 }
 
 impl GlobResult {

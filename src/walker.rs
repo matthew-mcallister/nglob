@@ -27,7 +27,7 @@ pub mod sync;
 pub mod tokio;
 
 #[derive(Clone, Debug)]
-pub(crate) struct WalkerEntry {
+struct WalkerEntry {
    file_type: FileType,
    name: SmallString,
 }

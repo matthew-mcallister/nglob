@@ -4,7 +4,7 @@ use std::iter::{FusedIterator, Once};
 use fnv::FnvHashMap;
 
 pub(crate) type TrieId = u32;
-pub(crate) type Char = char;
+type Char = char;
 
 #[derive(Debug)]
 pub(crate) struct TrieNode {
@@ -78,7 +78,7 @@ impl Children {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Char, TrieId)> + '_ {
+    fn iter(&self) -> impl Iterator<Item = (Char, TrieId)> + '_ {
         #[derive(Debug)]
         enum Iter<'a> {
             Empty,
@@ -120,7 +120,7 @@ impl Children {
 #[derive(Debug)]
 pub(crate) struct Trie<T> {
     pub(crate) nodes: Vec<TrieNode>,
-    pub(crate) values: FnvHashMap<TrieId, T>,
+    values: FnvHashMap<TrieId, T>,
 }
 
 impl<T> Default for Trie<T> {
@@ -161,7 +161,7 @@ impl<T> Trie<T> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_key(&self, key: &str) -> Option<&T> {
+    fn get_key(&self, key: &str) -> Option<&T> {
         let mut cur: usize = 0;
         for ch in key.chars() {
             let next = self.nodes[cur].children.get(ch)?;

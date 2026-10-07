@@ -35,42 +35,42 @@ pub(crate) struct Transition {
 }
 
 impl Transition {
-    pub(crate) fn epsilon(next: StateId) -> Self {
+    fn epsilon(next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::Epsilon,
         }
     }
 
-    pub(crate) fn wild_epsilon(next: StateId) -> Self {
+    fn wild_epsilon(next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::WildEpsilon,
         }
     }
 
-    pub(crate) fn chr(c: char, next: StateId) -> Self {
+    fn chr(c: char, next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::Char(c),
         }
     }
 
-    pub(crate) fn next_component(next: StateId) -> Self {
+    fn next_component(next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::NextComponent,
         }
     }
 
-    pub(crate) fn wild_next_component(next: StateId) -> Self {
+    fn wild_next_component(next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::WildNextComponent,
         }
     }
 
-    pub(crate) fn wildcard(next: StateId) -> Self {
+    fn wildcard(next: StateId) -> Self {
         Self {
             next,
             rule: TransitionRule::Wildcard,
@@ -86,7 +86,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn add_transition(&mut self, transition: Transition) {
+    fn add_transition(&mut self, transition: Transition) {
         match transition.rule {
             TransitionRule::Char(_) | TransitionRule::Wildcard => {
                 self.is_epsilon_frontier = true;
@@ -121,12 +121,12 @@ impl State {
 }
 
 #[derive(Debug)]
-pub(crate) struct PatternBuilder {
-    pub(crate) states: Vec<State>,
+struct PatternBuilder {
+    states: Vec<State>,
 }
 
 impl PatternBuilder {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         let states = vec![
             State::default(), // Initial
             State::default(), // Terminal
@@ -136,13 +136,13 @@ impl PatternBuilder {
         }
     }
 
-    pub(crate) fn new_state(&mut self) -> StateId {
+    fn new_state(&mut self) -> StateId {
         let id = self.states.len() as StateId;
         self.states.push(State::default());
         id
     }
 
-    pub(crate) fn connect(&mut self, from: StateId, transition: Transition) {
+    fn connect(&mut self, from: StateId, transition: Transition) {
         self.states[from as usize].add_transition(transition);
     }
 }
@@ -196,7 +196,7 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
 #[derive(Debug)]
 pub struct PatternInner {
     pub(crate) base_path: SmallString,
-    pub(crate) source: SmallString,
+    source: SmallString,
     pub(crate) states: Vec<State>,
 }
 
@@ -212,7 +212,7 @@ impl PatternInner {
         })
     }
 
-    pub(crate) fn source(&self) -> &str {
+    fn source(&self) -> &str {
         &self.source
     }
 
@@ -229,7 +229,7 @@ impl PatternInner {
     }
 
     #[cfg(test)]
-    pub(crate) fn between(&self, from: StateId, to: StateId) -> Vec<TransitionRule> {
+    fn between(&self, from: StateId, to: StateId) -> Vec<TransitionRule> {
         self.states[from as usize].transitions.iter()
             .filter(|t| t.next == to)
             .map(|t| t.rule)

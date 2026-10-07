@@ -21,10 +21,10 @@ pub(crate) struct TrieEntry {
 /// states with different is_literal values, but for actual transition
 /// calculations we use the richer MatcherState type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub(crate) struct StateKey {
-    pub(crate) pattern: StateId,
-    pub(crate) trie: TrieId,
-    pub(crate) next_component: bool,
+struct StateKey {
+    pattern: StateId,
+    trie: TrieId,
+    next_component: bool,
 }
 
 impl std::fmt::Display for StateKey {
@@ -39,7 +39,7 @@ impl std::fmt::Display for StateKey {
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub(crate) struct StateFlags: u8 {
+    struct StateFlags: u8 {
         const IS_LITERAL = 1;
     }
 }
