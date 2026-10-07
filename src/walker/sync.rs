@@ -276,4 +276,24 @@ mod tests {
             ["", "file.txt", "link_dir/", "link_dir/real.txt", "link_file", "sub/", "sub/real.txt"],
         );
     }
+
+    #[test]
+    fn dot_starstar() {
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                ".**",
+                &[".bashrc"]
+            ),
+            [".bashrc"],
+        );
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                "..**",
+                &["..bashrc"]
+            ),
+            ["..bashrc"],
+        );
+    }
 }

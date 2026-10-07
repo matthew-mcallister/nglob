@@ -183,6 +183,10 @@ impl<'a> ExpandedState<'a> {
         self.flags.is_literal
     }
 
+    fn is_component_start(&self) -> bool {
+        self.trie_id == self.trie.root()
+    }
+
     /// State has any transitions which are not epsilons
     fn is_epsilon_frontier(&self) -> bool {
         let node = self.pattern_node();
@@ -203,7 +207,8 @@ impl<'a> ExpandedState<'a> {
             TransitionRule::Epsilon
             | TransitionRule::WildEpsilon
             | TransitionRule::NextComponent
-            | TransitionRule::WildNextComponent => None,
+            | TransitionRule::WildNextComponent
+            | TransitionRule::ComponentStart => None,
         }
     }
 
@@ -215,6 +220,8 @@ impl<'a> ExpandedState<'a> {
             TransitionRule::WildEpsilon => Some(self.flags.with_literal(false)),
             TransitionRule::NextComponent if self.is_dir() => Some(self.flags.with_next_component(true)),
             TransitionRule::NextComponent => None,
+            TransitionRule::ComponentStart if self.is_component_start() => Some(self.flags),
+            TransitionRule::ComponentStart => None,
             // This prevents ** from matching zero components recursively
             TransitionRule::WildNextComponent if self.is_dir() => Some(self.flags.with_next_component(true).with_literal(false)),
             TransitionRule::WildNextComponent => None,
