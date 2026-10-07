@@ -7,21 +7,26 @@ license = "MIT"
 repository = "https://github.com/matthew-mcallister/nglob"
 description = "A library for globbing files and strings."
 
+[features]
+tokio = ["dep:tokio", "dep:tokio-stream"]
+
+[[bin]]
+name = "nglob"
+path = "src/main.rs"
+required-features = ["tokio"]
+
 [dependencies]
 bitflags = "^2.13.2"
 fnv = "^1.0.7"
 smallstr = "^0.3.1"
 smallvec = "^1.16.0"
 tokio = { version = "^1.53.1", features = ["fs", "rt"], optional = true }
-tokio-stream = { version = "^0.1.19", features = ["fs"], optional = true }
+tokio-stream = { version = "^0.1.19", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "^1.53.1", features = ["fs", "rt", "macros"] }
-tokio-stream = { version = "^0.1.19", features = ["fs"] }
-
-[features]
-tokio = ["dep:tokio", "dep:tokio-stream"]
+tokio-stream = "^0.1.19"
 
 [package.metadata.docs.rs]
 all-features = true
