@@ -300,4 +300,16 @@ mod tests {
             ["..bashrc"],
         );
     }
+
+    #[test]
+    fn duplicate_entries() {
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                "{**/*.txt,*.txt}",
+                &["a.txt"]
+            ),
+            ["a.txt"],
+        );
+    }
 }

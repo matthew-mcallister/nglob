@@ -178,6 +178,8 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
             sm.connect(loop_state, Transition::wild_next_component(loop_state));
 
             // Branch 2: matches zero components
+            // TODO: Close but no cigar. Need a transition that allows **/. to
+            // match '.' but does not allow **. to match '.'
             let skip_state = sm.new_state();
             sm.connect(initial, Transition::component_start(skip_state));
             sm.connect(skip_state, Transition::next_component(terminal));
