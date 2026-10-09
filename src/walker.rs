@@ -149,6 +149,10 @@ impl Walker {
       test_log!("recurse: {:?}", matcher.recurse.iter().map(|e| (e.state, e.index)).collect::<Vec<_>>());
       let mut recurse: Vec<Vec<StateId>> = vec![Vec::new(); entries.len()];
       for m in matcher.recurse {
+         if entries[m.index as usize].name.is_empty() {
+            // Do not recurse on ""
+            continue;
+         }
          recurse[m.index as usize].push(m.state);
       }
 

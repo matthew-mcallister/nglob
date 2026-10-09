@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use fnv::FnvHashSet;
 use smallvec::SmallVec;
 
 use crate::pattern::{Ast, ParseError, parse};
@@ -133,6 +134,7 @@ impl State {
 #[derive(Debug)]
 struct PatternBuilder {
     states: Vec<State>,
+    ss_skip: Vec<(StateId, StateId)>,
 }
 
 impl PatternBuilder {
@@ -143,6 +145,7 @@ impl PatternBuilder {
         ];
         Self {
             states,
+            ss_skip: Vec::new(),
         }
     }
 
@@ -154,6 +157,33 @@ impl PatternBuilder {
 
     fn connect(&mut self, from: StateId, transition: Transition) {
         self.states[from as usize].add_transition(transition);
+    }
+
+    /// Inserts skip edges to deal with patterns of the form '**/'
+    fn compile_skips(&mut self) {
+        let skips = std::mem::take(&mut self.ss_skip);
+        for (skip, term) in skips {
+            let mut seen = FnvHashSet::default();
+            seen.insert(term);
+            let mut queue = vec![term];
+            while let Some(s) = queue.pop() {
+                let transitions = self.states[s as usize].transitions.clone();
+                for tr in transitions {
+                    if !matches!(
+                        tr.rule,
+                        TransitionRule::Epsilon | TransitionRule::NextComponent
+                    ) {
+                        continue;
+                    }
+                    if seen.insert(tr.next) {
+                        queue.push(tr.next);
+                        if tr.rule == TransitionRule::NextComponent {
+                            self.connect(skip, Transition::epsilon(tr.next));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -178,11 +208,11 @@ fn compile(sm: &mut PatternBuilder, ast: &Ast, initial: StateId, terminal: State
             sm.connect(loop_state, Transition::wild_next_component(loop_state));
 
             // Branch 2: matches zero components
-            // TODO: Close but no cigar. Need a transition that allows **/. to
-            // match '.' but does not allow **. to match '.'
             let skip_state = sm.new_state();
             sm.connect(initial, Transition::component_start(skip_state));
             sm.connect(skip_state, Transition::next_component(terminal));
+            // Bypass recursion
+            sm.ss_skip.push((skip_state, terminal));
         }
         Ast::Sequence(nodes) => {
             assert!(!nodes.is_empty());
@@ -217,6 +247,7 @@ impl PatternInner {
         let parsed = parse(source)?;
         let mut builder = PatternBuilder::new();
         compile(&mut builder, &parsed.root, 0, 1);
+        builder.compile_skips();
         Ok(Self {
             base_path: parsed.base.into(),
             source: source.into(),

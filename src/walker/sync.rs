@@ -302,7 +302,20 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_entries() {
+    fn slash_starstar() {
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                "asdf/**",
+                &["asdf/a.txt"]
+            ),
+            ["asdf/", "asdf/a.txt"],
+        );
+    }
+
+    #[test]
+    fn starstar_dedupe() {
+        // Matches a.txt once
         assert_eq!(
             glob_with_config(
                 GlobConfig::new(),
@@ -310,6 +323,28 @@ mod tests {
                 &["a.txt"]
             ),
             ["a.txt"],
+        );
+    }
+
+    #[test]
+    fn starstar_dot() {
+        // Matches 'a.' but not '.'
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                "**.",
+                &["a."]
+            ),
+            ["a."],
+        );
+        // Matches '.'
+        assert_eq!(
+            glob_with_config(
+                GlobConfig::new(),
+                "**/.",
+                &["a"]
+            ),
+            ["./"],
         );
     }
 }
