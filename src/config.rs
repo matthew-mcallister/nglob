@@ -5,6 +5,7 @@ use crate::FileType;
 pub struct GlobConfig {
     follow_symlinks: bool,
     max_depth: usize,
+    max_open_files: usize,
     match_files: bool,
     match_directories: bool,
     match_other: bool,
@@ -15,6 +16,7 @@ impl Default for GlobConfig {
         Self {
             follow_symlinks: true,
             max_depth: 64,
+            max_open_files: 64,
             match_files: true,
             match_directories: true,
             match_other: true,
@@ -38,6 +40,12 @@ impl GlobConfig {
     /// Maximum recursion depth. Default: 64.
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_depth = max_depth;
+        self
+    }
+
+    /// Maximum number of simultaneous open directories. Default: 64.
+    pub fn with_max_open_files(mut self, max_open_files: usize) -> Self {
+        self.max_open_files = max_open_files;
         self
     }
 
@@ -68,6 +76,11 @@ impl GlobConfig {
     /// Maximum recursion depth. Default: 64.
     pub fn max_depth(&self) -> usize {
         self.max_depth
+    }
+
+    /// Maximum number of simultaneous open directories. Default: 64.
+    pub fn max_open_files(&self) -> usize {
+        self.max_open_files
     }
 
     /// Whether regular files are matched. Default: `true`.

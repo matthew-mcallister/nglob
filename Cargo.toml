@@ -20,7 +20,7 @@ bitflags = "^2.13.2"
 fnv = "^1.0.7"
 smallstr = "^0.3.1"
 smallvec = "^1.16.0"
-tokio = { version = "^1.53.1", features = ["fs", "rt"], optional = true }
+tokio = { version = "^1.53.1", features = ["fs", "rt", "sync"], optional = true }
 tokio-stream = { version = "^0.1.19", optional = true }
 
 [dev-dependencies]

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -18,6 +19,7 @@ use crate::walker::{Entry, GlobConfig, Walker, WalkerEntry};
 struct TokioWalker {
     inner: Walker,
     sender: UnboundedSender<Vec<Result<Entry, GlobError>>>,
+    semaphore: Arc<Semaphore>,
 }
 
 async fn walker_entry(entry: tokio::fs::DirEntry, follow_symlinks: bool) -> Result<WalkerEntry, GlobError> {
@@ -36,6 +38,7 @@ impl TokioWalker {
         Self {
             inner: self.inner.fork(),
             sender: self.sender.clone(),
+            semaphore: Arc::clone(&self.semaphore),
         }
     }
 
@@ -61,6 +64,7 @@ impl TokioWalker {
 
         let follow_symlinks = self.inner.config.follow_symlinks();
         let mut dir_entries = Vec::new();
+        let _permit = self.semaphore.acquire().await.unwrap();
         let mut read_dir = tokio::fs::read_dir(cur_dir)
             .await
             .map_err(|e| GlobError::new(cur_dir, e))?;
@@ -140,6 +144,7 @@ pub async fn glob(config: &GlobConfig, pattern: &Pattern) -> GlobResult {
     let mut walker = TokioWalker {
         inner: walker,
         sender,
+        semaphore: Arc::new(Semaphore::new(config.max_open_files())),
     };
     walker.walk().await;
     drop(walker);

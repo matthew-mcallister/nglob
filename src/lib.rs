@@ -14,6 +14,8 @@
 //!   non-regular files.
 //! - `max_depth` (default: 64): Maximum recursion depth. This prevents symlink
 //!   cycles from causing infinite recursion.
+//! - `max_open_files` (default: 64): Maximum number of simultaneous open
+//!   directories.
 //! - `match_files` (default: `true`): When `true`, matches regular files.
 //! - `match_directories` (default: `true`): When `true`, matches directories.
 //! - `match_other` (default: `true`): When `true`, matches non-regular files,
