@@ -44,7 +44,12 @@ impl GlobConfig {
     }
 
     /// Maximum number of simultaneous open directories. Default: 64.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_open_files` is zero.
     pub fn with_max_open_files(mut self, max_open_files: usize) -> Self {
+        assert!(max_open_files > 0, "max_open_files must be greater than zero");
         self.max_open_files = max_open_files;
         self
     }
